@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements. See the NOTICE file distributed with this
  * work for additional information regarding copyright ownership. The ASF
@@ -17,15 +17,10 @@
 
 package org.apache.zookeeper.server.quorum;
 
-import static org.mockito.Matchers.any;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
-import static org.junit.Assert.*;
-
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.List;
 import java.io.BufferedOutputStream;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -40,14 +35,13 @@ import java.nio.channels.SelectableChannel;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
 import java.nio.channels.SocketChannel;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 import java.util.Random;
-import org.junit.runner.RunWith;
-import org.junit.runners.Parameterized;
-import org.junit.runners.Parameterized.Parameters;
-
 import org.apache.jute.InputArchive;
 import org.apache.jute.OutputArchive;
+import org.apache.zookeeper.ClientCnxn;
 import org.apache.zookeeper.MockPacket;
 import org.apache.zookeeper.ZooDefs;
 import org.apache.zookeeper.proto.ConnectRequest;
@@ -55,14 +49,14 @@ import org.apache.zookeeper.proto.ReplyHeader;
 import org.apache.zookeeper.proto.RequestHeader;
 import org.apache.zookeeper.proto.SetWatches;
 import org.apache.zookeeper.server.MockNIOServerCnxn;
+import org.apache.zookeeper.server.MockSelectorThread;
 import org.apache.zookeeper.server.NIOServerCnxn;
 import org.apache.zookeeper.server.NIOServerCnxnFactory;
-import org.apache.zookeeper.server.MockSelectorThread;
 import org.apache.zookeeper.server.ZKDatabase;
 import org.apache.zookeeper.server.persistence.FileTxnSnapLog;
-import org.apache.zookeeper.ZKParameterized;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
 import org.slf4j.Logger;
@@ -71,39 +65,24 @@ import org.slf4j.LoggerFactory;
 /**
  * Demonstrate ZOOKEEPER-1382 : Watches leak on expired session
  */
-@RunWith(Parameterized.class)
-@Parameterized.UseParametersRunnerFactory(ZKParameterized.RunnerFactory.class)
 public class WatchLeakTest {
 
-    protected static final Logger LOG = LoggerFactory
-            .getLogger(WatchLeakTest.class);
+    protected static final Logger LOG = LoggerFactory.getLogger(WatchLeakTest.class);
 
     final long SESSION_ID = 0xBABEL;
 
-    private final boolean sessionTimedout;
-
-    @Before
+    @BeforeEach
     public void setUp() {
         System.setProperty("zookeeper.admin.enableServer", "false");
-    }
-
-    public WatchLeakTest(boolean sessionTimedout) {
-        this.sessionTimedout = sessionTimedout;
-    }
-
-    @Parameters
-    public static Collection<Object[]> configs() {
-        return Arrays.asList(new Object[][] {
-            { false }, { true },
-        });
     }
 
     /**
      * Check that if session has expired then no watch can be set
      */
 
-    @Test
-    public void testWatchesLeak() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    public void testWatchesLeak(boolean sessionTimedout) throws Exception {
 
         NIOServerCnxnFactory serverCnxnFactory = mock(NIOServerCnxnFactory.class);
         final SelectionKey sk = new FakeSK();
@@ -111,19 +90,19 @@ public class WatchLeakTest {
         when(selectorThread.addInterestOpsUpdateRequest(any(SelectionKey.class))).thenAnswer(new Answer<Boolean>() {
             @Override
             public Boolean answer(InvocationOnMock invocation) throws Throwable {
-                SelectionKey sk = (SelectionKey)invocation.getArguments()[0];
-                NIOServerCnxn nioSrvCnx = (NIOServerCnxn)sk.attachment();
+                SelectionKey sk = (SelectionKey) invocation.getArguments()[0];
+                NIOServerCnxn nioSrvCnx = (NIOServerCnxn) sk.attachment();
                 sk.interestOps(nioSrvCnx.getInterestOps());
                 return true;
             }
         });
 
-        ZKDatabase database = new ZKDatabase(null);
+        ZKDatabase database = new ZKDatabase(mock(FileTxnSnapLog.class));
         database.setlastProcessedZxid(2L);
         QuorumPeer quorumPeer = mock(QuorumPeer.class);
         FileTxnSnapLog logfactory = mock(FileTxnSnapLog.class);
         // Directories are not used but we need it to avoid NPE
-        when(logfactory.getDataDir()).thenReturn(new File(""));
+        when(logfactory.getDataLogDir()).thenReturn(new File(""));
         when(logfactory.getSnapDir()).thenReturn(new File(""));
         FollowerZooKeeperServer fzks = null;
 
@@ -137,8 +116,7 @@ public class WatchLeakTest {
             // Simulate a socket channel between a client and a follower
             final SocketChannel socketChannel = createClientSocketChannel();
             // Create the NIOServerCnxn that will handle the client requests
-            final MockNIOServerCnxn nioCnxn = new MockNIOServerCnxn(fzks,
-                    socketChannel, sk, serverCnxnFactory, selectorThread);
+            final MockNIOServerCnxn nioCnxn = new MockNIOServerCnxn(fzks, socketChannel, sk, serverCnxnFactory, selectorThread);
             sk.attach(nioCnxn);
             // Send the connection request as a client do
             nioCnxn.doIO(sk);
@@ -150,7 +128,7 @@ public class WatchLeakTest {
             // OK, now the follower knows that the session is valid or invalid, let's try
             // to send the watches
             nioCnxn.doIO(sk);
-            // wait for the the request processor to do his job
+            // wait for the request processor to do his job
             Thread.sleep(1000L);
             LOG.info("Watches processed");
             // If session has not been validated, there must be NO watches
@@ -158,11 +136,11 @@ public class WatchLeakTest {
             if (sessionTimedout) {
                 // Session has not been re-validated !
                 LOG.info("session is not valid, watches = {}", watchCount);
-                assertEquals("Session is not valid so there should be no watches", 0, watchCount);
+                assertEquals(0, watchCount, "Session is not valid so there should be no watches");
             } else {
                 // Session has been re-validated
                 LOG.info("session is valid, watches = {}", watchCount);
-                assertEquals("Session is valid so the watch should be there", 1, watchCount);
+                assertEquals(1, watchCount, "Session is valid so the watch should be there");
             }
         } finally {
             if (fzks != null) {
@@ -175,6 +153,7 @@ public class WatchLeakTest {
      * A follower with no real leader connection
      */
     public static class MyFollower extends Follower {
+
         /**
          * Create a follower with a mocked leader connection
          *
@@ -187,6 +166,7 @@ public class WatchLeakTest {
             leaderIs = mock(InputArchive.class);
             bufferedOutput = mock(BufferedOutputStream.class);
         }
+
     }
 
     /**
@@ -248,15 +228,14 @@ public class WatchLeakTest {
      * @return a message that attempts to set 1 watch on /
      */
     private ByteBuffer createWatchesMessage() {
-        List<String> dataWatches = new ArrayList<String>(1);
+        List<String> dataWatches = new ArrayList<>(1);
         dataWatches.add("/");
         List<String> existWatches = Collections.emptyList();
         List<String> childWatches = Collections.emptyList();
-        SetWatches sw = new SetWatches(1L, dataWatches, existWatches,
-                childWatches);
+        SetWatches sw = new SetWatches(1L, dataWatches, existWatches, childWatches);
         RequestHeader h = new RequestHeader();
         h.setType(ZooDefs.OpCode.setWatches);
-        h.setXid(-8);
+        h.setXid(ClientCnxn.SET_WATCHES_XID);
         MockPacket p = new MockPacket(h, new ReplyHeader(), sw, null, null);
         return p.createAndReturnBB();
     }
@@ -265,7 +244,7 @@ public class WatchLeakTest {
      * This is the secret that we use to generate passwords, for the moment it
      * is more of a sanity check.
      */
-    static final private long superSecret = 0XB3415C00L;
+    private static final long superSecret = 0XB3415C00L;
 
     /**
      * Create a connection request
@@ -274,10 +253,10 @@ public class WatchLeakTest {
      */
     private ByteBuffer createConnRequest() {
         Random r = new Random(SESSION_ID ^ superSecret);
-        byte p[] = new byte[16];
+        byte[] p = new byte[16];
         r.nextBytes(p);
-        ConnectRequest conReq = new ConnectRequest(0, 1L, 30000, SESSION_ID, p);
-        MockPacket packet = new MockPacket(null, null, conReq, null, null, false);
+        ConnectRequest conReq = new ConnectRequest(0, 1L, 30000, SESSION_ID, p, false);
+        MockPacket packet = new MockPacket(null, null, conReq, null, null);
         return packet.createAndReturnBB();
     }
 
@@ -299,8 +278,7 @@ public class WatchLeakTest {
         // Send watches packet to server connection
         final ByteBuffer connRequest = createConnRequest();
         final ByteBuffer watchesMessage = createWatchesMessage();
-        final ByteBuffer request = ByteBuffer.allocate(connRequest.limit()
-                + watchesMessage.limit());
+        final ByteBuffer request = ByteBuffer.allocate(connRequest.limit() + watchesMessage.limit());
         request.put(connRequest);
         request.put(watchesMessage);
 
@@ -355,8 +333,7 @@ public class WatchLeakTest {
         dos.writeLong(SESSION_ID);
         dos.writeInt(3000);
         dos.close();
-        QuorumPacket qp = new QuorumPacket(Leader.REVALIDATE, -1,
-                baos.toByteArray(), null);
+        QuorumPacket qp = new QuorumPacket(Leader.REVALIDATE, -1, baos.toByteArray(), null);
         return qp;
     }
 

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,18 +15,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.zookeeper.server;
 
-import static org.junit.Assert.*;
-
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.fail;
 import java.util.Set;
-
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 public class DataNodeTest {
 
     @Test
-    public void testGetChildrenShouldReturnEmptySetWhenThereAreNoChidren() {
+    public void testGetChildrenShouldReturnEmptySetWhenThereAreNoChildren() {
         // create DataNode and call getChildren
         DataNode dataNode = new DataNode();
         Set<String> children = dataNode.getChildren();
@@ -62,4 +63,5 @@ public class DataNodeTest {
             // do nothing
         }
     }
+
 }

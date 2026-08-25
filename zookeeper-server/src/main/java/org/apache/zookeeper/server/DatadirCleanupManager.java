@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -21,8 +21,7 @@ package org.apache.zookeeper.server;
 import java.io.File;
 import java.util.Timer;
 import java.util.TimerTask;
-import java.util.concurrent.TimeUnit;
-
+import org.apache.zookeeper.common.Time;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -41,7 +40,9 @@ public class DatadirCleanupManager {
      * Status of the dataDir purge task
      */
     public enum PurgeTaskStatus {
-        NOT_STARTED, STARTED, COMPLETED;
+        NOT_STARTED,
+        STARTED,
+        COMPLETED
     }
 
     private PurgeTaskStatus purgeTaskStatus = PurgeTaskStatus.NOT_STARTED;
@@ -52,31 +53,30 @@ public class DatadirCleanupManager {
 
     private final int snapRetainCount;
 
-    private final int purgeInterval;
+    private final int purgeIntervalInMs;
 
     private Timer timer;
 
     /**
      * Constructor of DatadirCleanupManager. It takes the parameters to schedule
      * the purge task.
-     * 
+     *
      * @param snapDir
      *            snapshot directory
      * @param dataLogDir
      *            transaction log directory
      * @param snapRetainCount
      *            number of snapshots to be retained after purge
-     * @param purgeInterval
-     *            purge interval in hours
+     * @param purgeIntervalInMs
+     *            purge interval in milliseconds
      */
-    public DatadirCleanupManager(File snapDir, File dataLogDir, int snapRetainCount,
-            int purgeInterval) {
+    public DatadirCleanupManager(File snapDir, File dataLogDir, int snapRetainCount, int purgeIntervalInMs) {
         this.snapDir = snapDir;
         this.dataLogDir = dataLogDir;
         this.snapRetainCount = snapRetainCount;
-        this.purgeInterval = purgeInterval;
-        LOG.info("autopurge.snapRetainCount set to " + snapRetainCount);
-        LOG.info("autopurge.purgeInterval set to " + purgeInterval);
+        this.purgeIntervalInMs = purgeIntervalInMs;
+        LOG.info("autopurge.snapRetainCount set to {}", snapRetainCount);
+        LOG.info("autopurge.purgeInterval set to {}", Time.formatTimeIntervalMs(purgeIntervalInMs));
     }
 
     /**
@@ -88,7 +88,7 @@ public class DatadirCleanupManager {
      * <code>purgeInterval</code> of <code>0</code> or
      * <code>negative integer</code> will not schedule the purge task.
      * </p>
-     * 
+     *
      * @see PurgeTxnLog#purge(File, File, int)
      */
     public void start() {
@@ -97,14 +97,14 @@ public class DatadirCleanupManager {
             return;
         }
         // Don't schedule the purge task with zero or negative purge interval.
-        if (purgeInterval <= 0) {
+        if (purgeIntervalInMs <= 0) {
             LOG.info("Purge task is not scheduled.");
             return;
         }
 
         timer = new Timer("PurgeTask", true);
         TimerTask task = new PurgeTask(dataLogDir, snapDir, snapRetainCount);
-        timer.scheduleAtFixedRate(task, 0, TimeUnit.HOURS.toMillis(purgeInterval));
+        timer.scheduleAtFixedRate(task, 0, purgeIntervalInMs);
 
         purgeTaskStatus = PurgeTaskStatus.STARTED;
     }
@@ -123,6 +123,7 @@ public class DatadirCleanupManager {
     }
 
     static class PurgeTask extends TimerTask {
+
         private File logsDir;
         private File snapsDir;
         private int snapRetainCount;
@@ -143,11 +144,12 @@ public class DatadirCleanupManager {
             }
             LOG.info("Purge task completed.");
         }
+
     }
 
     /**
      * Returns the status of the purge task.
-     * 
+     *
      * @return the status of the purge task
      */
     public PurgeTaskStatus getPurgeTaskStatus() {
@@ -156,7 +158,7 @@ public class DatadirCleanupManager {
 
     /**
      * Returns the snapshot directory.
-     * 
+     *
      * @return the snapshot directory.
      */
     public File getSnapDir() {
@@ -165,7 +167,7 @@ public class DatadirCleanupManager {
 
     /**
      * Returns transaction log directory.
-     * 
+     *
      * @return the transaction log directory.
      */
     public File getDataLogDir() {
@@ -173,20 +175,21 @@ public class DatadirCleanupManager {
     }
 
     /**
-     * Returns purge interval in hours.
-     * 
-     * @return the purge interval in hours.
+     * Returns purge interval in milliseconds.
+     *
+     * @return the purge interval in milliseconds.
      */
-    public int getPurgeInterval() {
-        return purgeInterval;
+    public int getPurgeIntervalInMs() {
+        return purgeIntervalInMs;
     }
 
     /**
      * Returns the number of snapshots to be retained after purge.
-     * 
+     *
      * @return the number of snapshots to be retained after purge.
      */
     public int getSnapRetainCount() {
         return snapRetainCount;
     }
+
 }

@@ -18,9 +18,6 @@
  *
  * This is a simple example of utilization:
  *
- * import com.nitido.utils.toaster.*;
- * import javax.swing.*;
- *
  * public class ToasterTest
  * {
  *
@@ -36,15 +33,23 @@
  */
 package com.nitido.utils.toaster;
 
-import java.awt.*;
 
-import javax.swing.*;
-import javax.swing.border.*;
+import javax.swing.BorderFactory;
+import javax.swing.Icon;
+import javax.swing.JLabel;
+import javax.swing.JPanel;
+import javax.swing.JTextArea;
+import javax.swing.JWindow;
+import javax.swing.border.EtchedBorder;
+import java.awt.BorderLayout;
+import java.awt.Color;
+import java.awt.Font;
+import java.awt.GraphicsEnvironment;
+import java.awt.Insets;
+import java.awt.Rectangle;
 
 /**
  * Class to show tosters in multiplatform
- *
- * @author daniele piras
  *
  */
 public class Toaster
@@ -97,8 +102,6 @@ public class Toaster
 	/**
 	 * Constructor to initialized toaster component...
 	 *
-	 * @author daniele piras
-	 *
 	 */
 	public Toaster()
 	{
@@ -124,8 +127,6 @@ public class Toaster
 	/**
 	 * Class that rappresent a single toaster
 	 *
-	 * @author daniele piras
-	 *
 	 */
 	class SingleToaster extends javax.swing.JWindow
 	{
@@ -141,7 +142,7 @@ public class Toaster
 
 
 		/***
-		 * Simple costructor that initialized components...
+		 * Simple constructor that initialized components...
 		 */
 		public SingleToaster()
 		{

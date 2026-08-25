@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,9 +19,9 @@
 package org.apache.zookeeper.server.util;
 
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
-import java.util.Map;
-import java.util.HashMap;
 import java.util.BitSet;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
@@ -30,16 +30,15 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  */
 public class BitMap<T> {
 
-    private final Map<T, Integer> value2Bit = new HashMap<T, Integer>();
-    private final Map<Integer, T> bit2Value = new HashMap<Integer, T>();
+    private final Map<T, Integer> value2Bit = new HashMap<>();
+    private final Map<Integer, T> bit2Value = new HashMap<>();
 
     private final BitSet freedBitSet = new BitSet();
     private Integer nextBit = Integer.valueOf(0);
 
     private final ReentrantReadWriteLock rwLock = new ReentrantReadWriteLock();
 
-    @SuppressFBWarnings(value = "DLS_DEAD_LOCAL_STORE",
-            justification = "SpotBugs false positive")
+    @SuppressFBWarnings(value = "DLS_DEAD_LOCAL_STORE", justification = "SpotBugs false positive")
     public Integer add(T value) {
         /*
          * Optimized for code which will add the same value again and again,
@@ -94,7 +93,7 @@ public class BitMap<T> {
 
     public int remove(T value) {
         /*
-         * remove only called once when the session is closed, so use write 
+         * remove only called once when the session is closed, so use write
          * lock directly without checking read lock.
          */
         rwLock.writeLock().lock();
@@ -136,4 +135,5 @@ public class BitMap<T> {
             rwLock.readLock().unlock();
         }
     }
+
 }

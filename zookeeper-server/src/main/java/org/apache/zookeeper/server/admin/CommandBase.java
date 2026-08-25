@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -23,21 +23,30 @@ import java.util.List;
 import java.util.Set;
 
 public abstract class CommandBase implements Command {
+
     private final String primaryName;
     private final Set<String> names;
-    private final String doc;
+    private final boolean serverRequired;
+    private final AuthRequest authRequest;
 
     /**
      * @param names The possible names of this command, with the primary name first.
      */
     protected CommandBase(List<String> names) {
-        this(names, null);
+        this(names, true);
+    }
+    protected CommandBase(List<String> names, boolean serverRequired) {
+        this(names, serverRequired, null);
     }
 
-    protected CommandBase(List<String> names, String doc) {
+    protected CommandBase(List<String> names, boolean serverRequired, AuthRequest authRequest) {
+        if (authRequest != null && !serverRequired) {
+            throw new IllegalArgumentException("An active server is required for auth check");
+        }
         this.primaryName = names.get(0);
-        this.names = new HashSet<String>(names);
-        this.doc = doc;
+        this.names = new HashSet<>(names);
+        this.serverRequired = serverRequired;
+        this.authRequest = authRequest;
     }
 
     @Override
@@ -50,9 +59,15 @@ public abstract class CommandBase implements Command {
         return names;
     }
 
+
     @Override
-    public String getDoc() {
-        return doc;
+    public boolean isServerRequired() {
+        return serverRequired;
+    }
+
+    @Override
+    public AuthRequest getAuthRequest() {
+        return authRequest;
     }
 
     /**
@@ -63,4 +78,5 @@ public abstract class CommandBase implements Command {
     protected CommandResponse initializeResponse() {
         return new CommandResponse(primaryName);
     }
+
 }

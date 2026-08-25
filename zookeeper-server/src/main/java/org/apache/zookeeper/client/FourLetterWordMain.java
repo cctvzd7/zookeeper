@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,6 +18,7 @@
 
 package org.apache.zookeeper.client;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
@@ -26,13 +27,11 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
-
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocket;
 import javax.net.ssl.SSLSocketFactory;
-
-import org.apache.zookeeper.common.ClientX509Util;
 import org.apache.yetus.audience.InterfaceAudience;
+import org.apache.zookeeper.common.ClientX509Util;
 import org.apache.zookeeper.common.X509Exception.SSLContextException;
 import org.apache.zookeeper.common.X509Util;
 import org.slf4j.Logger;
@@ -40,6 +39,7 @@ import org.slf4j.LoggerFactory;
 
 @InterfaceAudience.Public
 public class FourLetterWordMain {
+
     //in milliseconds, socket should connect/read within this period otherwise SocketTimeoutException
     private static final int DEFAULT_SOCKET_TIMEOUT = 5000;
     protected static final Logger LOG = LoggerFactory.getLogger(FourLetterWordMain.class);
@@ -52,8 +52,7 @@ public class FourLetterWordMain {
      * @throws java.io.IOException
      * @throws SSLContextException
      */
-    public static String send4LetterWord(String host, int port, String cmd)
-            throws IOException, SSLContextException {
+    public static String send4LetterWord(String host, int port, String cmd) throws IOException, SSLContextException {
         return send4LetterWord(host, port, cmd, false, DEFAULT_SOCKET_TIMEOUT);
     }
 
@@ -67,8 +66,11 @@ public class FourLetterWordMain {
      * @throws java.io.IOException
      * @throws SSLContextException
      */
-    public static String send4LetterWord(String host, int port, String cmd, boolean secure)
-            throws IOException, SSLContextException {
+    public static String send4LetterWord(
+        String host,
+        int port,
+        String cmd,
+        boolean secure) throws IOException, SSLContextException {
         return send4LetterWord(host, port, cmd, secure, DEFAULT_SOCKET_TIMEOUT);
     }
 
@@ -83,31 +85,90 @@ public class FourLetterWordMain {
      * @throws java.io.IOException
      * @throws SSLContextException
      */
-    public static String send4LetterWord(String host, int port, String cmd, boolean secure, int timeout)
-            throws IOException, SSLContextException {
-        LOG.info("connecting to {} {}", host, port);
-        Socket sock;
-        InetSocketAddress hostaddress= host != null ? new InetSocketAddress(host, port) :
-            new InetSocketAddress(InetAddress.getByName(null), port);
-        if (secure) {
-            LOG.info("using secure socket");
+    public static String send4LetterWord(
+        String host,
+        int port,
+        String cmd,
+        boolean secure,
+        int timeout) throws IOException, SSLContextException {
+        return send4LetterWord(host, port, cmd, secure, timeout, null);
+    }
+
+    /**
+     * Send the 4letterword
+     * @param host the destination host
+     * @param port the destination port
+     * @param cmd the 4letterword
+     * @param clientConfig client config
+     * @param timeout in milliseconds, maximum time to wait while connecting/reading data
+     * @return server response
+     * @throws SSLContextException
+     * @throws IOException
+     */
+    public static String send4LetterWord(
+            String host,
+            int port,
+            String cmd,
+            ZKClientConfig clientConfig,
+            int timeout) throws SSLContextException, IOException {
+        boolean useSecure = clientConfig.getBoolean(ZKClientConfig.SECURE_CLIENT);
+        SSLContext sslContext = null;
+        if (useSecure) {
             try (X509Util x509Util = new ClientX509Util()) {
-                SSLContext sslContext = x509Util.getDefaultSSLContext();
+                sslContext = x509Util.createSSLContext(clientConfig);
+            }
+        }
+        return send4LetterWord(host, port, cmd, useSecure, timeout, sslContext);
+    }
+
+    /**
+     * Send the 4letterword
+     * @param host the destination host
+     * @param port the destination port
+     * @param cmd the 4letterword
+     * @param secure whether to use SSL
+     * @param timeout in milliseconds, maximum time to wait while connecting/reading data
+     * @param sslContext SSL context
+     * @return server response
+     * @throws java.io.IOException
+     * @throws SSLContextException
+     */
+    public static String send4LetterWord(
+        String host,
+        int port,
+        String cmd,
+        boolean secure,
+        int timeout,
+        SSLContext sslContext) throws IOException, SSLContextException {
+        LOG.info("connecting to {}:{} (secure={})", host, port, secure);
+
+        Socket sock = null;
+        BufferedReader reader = null;
+        try {
+            InetSocketAddress hostaddress = host != null
+                ? new InetSocketAddress(host, port)
+                : new InetSocketAddress(InetAddress.getByName(null), port);
+            if (secure) {
+                LOG.info("using secure socket");
+                if (sslContext == null) {
+                    try (X509Util x509Util = new ClientX509Util()) {
+                        sslContext = x509Util.getDefaultSSLContext();
+                    }
+                }
                 SSLSocketFactory socketFactory = sslContext.getSocketFactory();
                 SSLSocket sslSock = (SSLSocket) socketFactory.createSocket();
                 sslSock.connect(hostaddress, timeout);
                 sslSock.startHandshake();
                 sock = sslSock;
+            } else {
+                sock = new Socket();
+                sock.connect(hostaddress, timeout);
             }
-        } else {
-            sock = new Socket();
-            sock.connect(hostaddress, timeout);
-        }
-        sock.setSoTimeout(timeout);
-        BufferedReader reader = null;
-        try {
+            sock.setSoLinger(false, -1);
+            sock.setSoTimeout(timeout);
+            sock.setTcpNoDelay(true);
             OutputStream outstream = sock.getOutputStream();
-            outstream.write(cmd.getBytes());
+            outstream.write(cmd.getBytes(UTF_8));
             outstream.flush();
 
             // this replicates NC - close the output stream before reading
@@ -116,28 +177,26 @@ public class FourLetterWordMain {
                 sock.shutdownOutput();
             }
 
-            reader =
-                    new BufferedReader(
-                            new InputStreamReader(sock.getInputStream()));
+            reader = new BufferedReader(new InputStreamReader(sock.getInputStream()));
             StringBuilder sb = new StringBuilder();
             String line;
-            while((line = reader.readLine()) != null) {
+            while ((line = reader.readLine()) != null) {
                 sb.append(line).append("\n");
             }
             return sb.toString();
         } catch (SocketTimeoutException e) {
             throw new IOException("Exception while executing four letter word: " + cmd, e);
         } finally {
-            sock.close();
+            if (sock != null) {
+                sock.close();
+            }
             if (reader != null) {
                 reader.close();
             }
         }
     }
-    
-    public static void main(String[] args)
-            throws IOException, SSLContextException
-    {
+
+    public static void main(String[] args) throws IOException, SSLContextException {
         if (args.length == 3) {
             System.out.println(send4LetterWord(args[0], Integer.parseInt(args[1]), args[2]));
         } else if (args.length == 4) {
@@ -146,4 +205,5 @@ public class FourLetterWordMain {
             System.out.println("Usage: FourLetterWordMain <host> <port> <cmd> <secure(optional)>");
         }
     }
+
 }

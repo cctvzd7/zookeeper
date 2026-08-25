@@ -36,6 +36,7 @@ using namespace std;
 class Zookeeper_init : public CPPUNIT_NS::TestFixture
 {
     CPPUNIT_TEST_SUITE(Zookeeper_init);
+    CPPUNIT_TEST(testVersion);
     CPPUNIT_TEST(testBasic);
     CPPUNIT_TEST(testAddressResolution);
     CPPUNIT_TEST(testMultipleAddressResolution);
@@ -90,6 +91,11 @@ public:
 #endif
     }
 
+    void testVersion()
+    {
+        CPPUNIT_ASSERT_EQUAL(string(ZOO_VERSION), string(zoo_version_str()));
+    }
+
     void testBasic()
     {
         const string EXPECTED_HOST("127.0.0.1:2121");
@@ -102,7 +108,7 @@ public:
                 &cid,(void*)1,0);
 
         CPPUNIT_ASSERT(zh != NULL);
-        CPPUNIT_ASSERT(zh->fd == -1);
+        CPPUNIT_ASSERT(zh->fd->sock == -1);
         CPPUNIT_ASSERT(zh->hostname != NULL);
         CPPUNIT_ASSERT_EQUAL(EXPECTED_ADDRS_COUNT,zh->addrs.count);
         CPPUNIT_ASSERT_EQUAL(EXPECTED_HOST,string(zh->hostname));
@@ -143,7 +149,7 @@ public:
 
         CPPUNIT_ASSERT(zh!=0);
         CPPUNIT_ASSERT_EQUAL(EXPECTED_ADDRS_COUNT,zh->addrs.count);
-        for(int i=0;i<zh->addrs.count;i++){
+        for(unsigned int i=0;i<zh->addrs.count;i++){
             sockaddr_in* addr=(struct sockaddr_in*)&zh->addrs.data[i];
             CPPUNIT_ASSERT(memcmp(EXPECTED_IPS[i],&addr->sin_addr,sizeof(addr->sin_addr))==0);
             CPPUNIT_ASSERT_EQUAL(2121,(int)ntohs(addr->sin_port));
@@ -161,7 +167,7 @@ public:
         CPPUNIT_ASSERT(zh!=0);
         CPPUNIT_ASSERT_EQUAL(EXPECTED_ADDRS_COUNT,zh->addrs.count);
 
-        for(int i=0;i<zh->addrs.count;i++){
+        for(unsigned int i=0;i<zh->addrs.count;i++){
             sockaddr_in* addr=(struct sockaddr_in*)&zh->addrs.data[i];
             CPPUNIT_ASSERT(memcmp(EXPECTED_IPS[i],&addr->sin_addr,sizeof(addr->sin_addr))==0);
             if(i<1)
@@ -182,7 +188,7 @@ public:
         CPPUNIT_ASSERT(zh!=0);
         CPPUNIT_ASSERT_EQUAL(EXPECTED_ADDRS_COUNT,zh->addrs.count);
 
-        for(int i=0;i<zh->addrs.count;i++){
+        for(unsigned int i=0;i<zh->addrs.count;i++){
             sockaddr_in* addr=(struct sockaddr_in*)&zh->addrs.data[i];
             CPPUNIT_ASSERT(memcmp(EXPECTED_IPS[i],&addr->sin_addr,sizeof(addr->sin_addr))==0);
             if(i<1)
@@ -289,7 +295,7 @@ public:
         CPPUNIT_ASSERT_EQUAL(EXPECTED_ADDR_COUNT,zh->addrs.count);
         const string EXPECTED_SEQ("3210");
         char ACTUAL_SEQ[EXPECTED_ADDR_COUNT+1]; ACTUAL_SEQ[EXPECTED_ADDR_COUNT]=0;
-        for(int i=0;i<zh->addrs.count;i++){
+        for(unsigned int i=0;i<zh->addrs.count;i++){
             sockaddr_in* addr=(struct sockaddr_in*)&zh->addrs.data[i];
             // match the first byte of the EXPECTED and of the actual address
             ACTUAL_SEQ[i]=((char*)&addr->sin_addr)[0]+'0';

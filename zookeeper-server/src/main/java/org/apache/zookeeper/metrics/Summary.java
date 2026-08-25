@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -20,16 +20,16 @@ package org.apache.zookeeper.metrics;
 
 /**
  * Summaries track the size and number of events.
- * They are able to publish minumum, maximum, average values, depending on the capabilities of the MetricsProvider.
+ * They are able to publish minimum, maximum, average values, depending on the capabilities of the MetricsProvider.
  */
 public interface Summary {
 
-     /**
-      * Register a value.
-      * <p>This method is thread safe, The MetricsProvider will take care of synchronization.</p>
-      *
-      * @param value current value
-      */
-     void registerValue(long value);
+    /**
+     * Register a value.
+     * <p>This method is thread safe, The MetricsProvider will take care of synchronization.</p>
+     *
+     * @param value current value
+     */
+    void add(long value);
 
 }

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,22 +18,6 @@
 
 package org.apache.zookeeper;
 
-import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.net.SocketAddress;
-import java.util.Iterator;
-import java.util.List;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.Semaphore;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReentrantLock;
-
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLEngine;
-
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
@@ -48,19 +32,30 @@ import io.netty.channel.ChannelPipeline;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.channel.socket.SocketChannel;
-import io.netty.handler.ssl.SslHandler;
+import io.netty.handler.ssl.SslContext;
 import io.netty.util.concurrent.Future;
 import io.netty.util.concurrent.GenericFutureListener;
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
+import java.util.Iterator;
+import java.util.Queue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
+import javax.net.ssl.SSLException;
 import org.apache.zookeeper.ClientCnxn.EndOfStreamException;
 import org.apache.zookeeper.ClientCnxn.Packet;
 import org.apache.zookeeper.client.ZKClientConfig;
 import org.apache.zookeeper.common.ClientX509Util;
 import org.apache.zookeeper.common.NettyUtils;
-import org.apache.zookeeper.common.X509Util;
+import org.apache.zookeeper.common.X509Exception;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import static org.apache.zookeeper.common.X509Exception.SSLContextException;
 
 /**
  * ClientCnxnSocketNetty implements ClientCnxnSocket abstract methods.
@@ -68,6 +63,7 @@ import static org.apache.zookeeper.common.X509Exception.SSLContextException;
  * being a layer between network data and higher level packets.
  */
 public class ClientCnxnSocketNetty extends ClientCnxnSocket {
+
     private static final Logger LOG = LoggerFactory.getLogger(ClientCnxnSocketNetty.class);
 
     private final EventLoopGroup eventLoopGroup;
@@ -79,8 +75,7 @@ public class ClientCnxnSocketNetty extends ClientCnxnSocket {
     private final AtomicBoolean needSasl = new AtomicBoolean();
     private final Semaphore waitSasl = new Semaphore(0);
 
-    private static final AtomicReference<ByteBufAllocator> TEST_ALLOCATOR =
-            new AtomicReference<>(null);
+    private static final AtomicReference<ByteBufAllocator> TEST_ALLOCATOR = new AtomicReference<>(null);
 
     ClientCnxnSocketNetty(ZKClientConfig clientConfig) throws IOException {
         this.clientConfig = clientConfig;
@@ -92,7 +87,7 @@ public class ClientCnxnSocketNetty extends ClientCnxnSocket {
 
     /**
      * lifecycles diagram:
-     * <p/>
+     * <p>
      * loop:
      * - try:
      * - - !isConnected()
@@ -101,7 +96,7 @@ public class ClientCnxnSocketNetty extends ClientCnxnSocket {
      * - catch:
      * - - cleanup()
      * close()
-     * <p/>
+     * <p>
      * Other non-lifecycle methods are in jeopardy getting a null channel
      * when calling in concurrency. We must handle it.
      */
@@ -131,12 +126,11 @@ public class ClientCnxnSocketNetty extends ClientCnxnSocket {
     void connect(InetSocketAddress addr) throws IOException {
         firstConnect = new CountDownLatch(1);
 
-        Bootstrap bootstrap = new Bootstrap()
-                .group(eventLoopGroup)
-                .channel(NettyUtils.nioOrEpollSocketChannel())
-                .option(ChannelOption.SO_LINGER, -1)
-                .option(ChannelOption.TCP_NODELAY, true)
-                .handler(new ZKClientPipelineFactory(addr.getHostString(), addr.getPort()));
+        Bootstrap bootstrap = new Bootstrap().group(eventLoopGroup)
+                                             .channel(NettyUtils.nioOrEpollSocketChannel())
+                                             .option(ChannelOption.SO_LINGER, -1)
+                                             .option(ChannelOption.TCP_NODELAY, true)
+                                             .handler(new ZKClientPipelineFactory(addr.getHostString(), addr.getPort()));
         bootstrap = configureBootstrapAllocator(bootstrap);
         bootstrap.validate();
 
@@ -151,7 +145,7 @@ public class ClientCnxnSocketNetty extends ClientCnxnSocket {
                     connectLock.lock();
                     try {
                         if (!channelFuture.isSuccess()) {
-                            LOG.info("future isn't success, cause:", channelFuture.cause());
+                            LOG.warn("future isn't success.", channelFuture.cause());
                             return;
                         } else if (connectFuture == null) {
                             LOG.info("connect attempt cancelled");
@@ -209,7 +203,7 @@ public class ClientCnxnSocketNetty extends ClientCnxnSocket {
                 connectFuture = null;
             }
             if (channel != null) {
-                channel.close().syncUninterruptibly();
+                channel.close();
                 channel = null;
             }
         } finally {
@@ -248,7 +242,9 @@ public class ClientCnxnSocketNetty extends ClientCnxnSocket {
 
     @Override
     void onClosing() {
-        firstConnect.countDown();
+        if (firstConnect != null) {
+            firstConnect.countDown();
+        }
         wakeupCnxn();
         LOG.info("channel is told closing");
     }
@@ -257,14 +253,16 @@ public class ClientCnxnSocketNetty extends ClientCnxnSocket {
         if (needSasl.get()) {
             waitSasl.release();
         }
-        outgoingQueue.add(WakeupPacket.getInstance());
+        if (outgoingQueue != null) {
+          outgoingQueue.add(WakeupPacket.getInstance());
+        }
     }
 
     @Override
-    void doTransport(int waitTimeOut,
-                     List<Packet> pendingQueue,
-                     ClientCnxn cnxn)
-            throws IOException, InterruptedException {
+    void doTransport(
+        int waitTimeOut,
+        Queue<Packet> pendingQueue,
+        ClientCnxn cnxn) throws IOException, InterruptedException {
         try {
             if (!firstConnect.await(waitTimeOut, TimeUnit.MILLISECONDS)) {
                 return;
@@ -286,9 +284,7 @@ public class ClientCnxnSocketNetty extends ClientCnxnSocket {
             // channel disconnection happened
             if (disconnected.get()) {
                 addBack(head);
-                throw new EndOfStreamException("channel for sessionid 0x"
-                        + Long.toHexString(sessionId)
-                        + " is lost");
+                throw new EndOfStreamException("channel for sessionid 0x" + Long.toHexString(sessionId) + " is lost");
             }
             if (head != null) {
                 doWrite(pendingQueue, head, cnxn);
@@ -310,7 +306,7 @@ public class ClientCnxnSocketNetty extends ClientCnxnSocket {
      * @return a ChannelFuture that will complete when the write operation
      *         succeeds or fails.
      */
-    private ChannelFuture sendPktAndFlush(Packet p) {
+    private ChannelFuture sendPktAndFlush(Packet p) throws IOException {
         return sendPkt(p, true);
     }
 
@@ -320,7 +316,7 @@ public class ClientCnxnSocketNetty extends ClientCnxnSocket {
      * @return a ChannelFuture that will complete when the write operation
      *         succeeds or fails.
      */
-    private ChannelFuture sendPktOnly(Packet p) {
+    private ChannelFuture sendPktOnly(Packet p) throws IOException {
         return sendPkt(p, false);
     }
 
@@ -331,20 +327,21 @@ public class ClientCnxnSocketNetty extends ClientCnxnSocket {
         }
     };
 
-    private ChannelFuture sendPkt(Packet p, boolean doFlush) {
+    private ChannelFuture sendPkt(Packet p, boolean doFlush) throws IOException {
+        if (channel == null) {
+            throw new IOException("channel has been closed");
+        }
         // Assuming the packet will be sent out successfully. Because if it fails,
         // the channel will close and clean up queues.
         p.createBB();
         updateLastSend();
         final ByteBuf writeBuffer = Unpooled.wrappedBuffer(p.bb);
-        final ChannelFuture result = doFlush
-                ? channel.writeAndFlush(writeBuffer)
-                : channel.write(writeBuffer);
+        final ChannelFuture result = doFlush ? channel.writeAndFlush(writeBuffer) : channel.write(writeBuffer);
         result.addListener(onSendPktDoneListener);
         return result;
     }
 
-    private void sendPrimePacket() {
+    private void sendPrimePacket() throws IOException {
         // assuming the first packet is the priming packet.
         sendPktAndFlush(outgoingQueue.remove());
     }
@@ -352,14 +349,14 @@ public class ClientCnxnSocketNetty extends ClientCnxnSocket {
     /**
      * doWrite handles writing the packets from outgoingQueue via network to server.
      */
-    private void doWrite(List<Packet> pendingQueue, Packet p, ClientCnxn cnxn) {
+    private void doWrite(Queue<Packet> pendingQueue, Packet p, ClientCnxn cnxn) throws IOException {
         updateNow();
         boolean anyPacketsSent = false;
         while (true) {
             if (p != WakeupPacket.getInstance()) {
-                if ((p.requestHeader != null) &&
-                        (p.requestHeader.getType() != ZooDefs.OpCode.ping) &&
-                        (p.requestHeader.getType() != ZooDefs.OpCode.auth)) {
+                if ((p.requestHeader != null)
+                    && (p.requestHeader.getType() != ZooDefs.OpCode.ping)
+                    && (p.requestHeader.getType() != ZooDefs.OpCode.auth)) {
                     p.requestHeader.setXid(cnxn.getXid());
                     synchronized (pendingQueue) {
                         pendingQueue.add(p);
@@ -382,9 +379,6 @@ public class ClientCnxnSocketNetty extends ClientCnxnSocket {
 
     @Override
     void sendPacket(ClientCnxn.Packet p) throws IOException {
-        if (channel == null) {
-            throw new IOException("channel has been closed");
-        }
         sendPktAndFlush(p);
     }
 
@@ -408,9 +402,9 @@ public class ClientCnxnSocketNetty extends ClientCnxnSocket {
         }
     }
 
-
-    // *************** <END> CientCnxnSocketNetty </END> ******************
+    // *************** <END> ClientCnxnSocketNetty </END> ******************
     private static class WakeupPacket {
+
         private static final Packet instance = new Packet(null, null, null, null, null);
 
         protected WakeupPacket() {
@@ -420,6 +414,7 @@ public class ClientCnxnSocketNetty extends ClientCnxnSocket {
         public static Packet getInstance() {
             return instance;
         }
+
     }
 
     /**
@@ -427,12 +422,11 @@ public class ClientCnxnSocketNetty extends ClientCnxnSocket {
      * connection implementation.
      */
     private class ZKClientPipelineFactory extends ChannelInitializer<SocketChannel> {
-        private SSLContext sslContext = null;
-        private SSLEngine sslEngine = null;
-        private String host;
-        private int port;
+        private SslContext sslContext = null;
+        private final String host;
+        private final int port;
 
-        public ZKClientPipelineFactory(String host, int port) {
+        private ZKClientPipelineFactory(String host, int port) {
             this.host = host;
             this.port = port;
         }
@@ -446,19 +440,20 @@ public class ClientCnxnSocketNetty extends ClientCnxnSocket {
             pipeline.addLast("handler", new ZKClientHandler());
         }
 
-        // The synchronized is to prevent the race on shared variable "sslEngine".
+        // The synchronized is to prevent the race on shared variable "sslContext".
         // Basically we only need to create it once.
-        private synchronized void initSSL(ChannelPipeline pipeline) throws SSLContextException {
-            if (sslContext == null || sslEngine == null) {
-                try (X509Util x509Util = new ClientX509Util()) {
-                    sslContext = x509Util.createSSLContext(clientConfig);
-                    sslEngine = sslContext.createSSLEngine(host, port);
-                    sslEngine.setUseClientMode(true);
+        private synchronized void initSSL(ChannelPipeline pipeline)
+            throws X509Exception.SSLContextException, X509Exception.KeyManagerException,
+                   X509Exception.TrustManagerException, SSLException {
+            if (sslContext == null) {
+                try (ClientX509Util x509Util = new ClientX509Util()) {
+                    sslContext = x509Util.createNettySslContextForClient(clientConfig);
                 }
             }
-            pipeline.addLast("ssl", new SslHandler(sslEngine));
+            pipeline.addLast("ssl", sslContext.newHandler(pipeline.channel().alloc(), host, port));
             LOG.info("SSL handler added for channel: {}", pipeline.channel());
         }
+
     }
 
     /**
@@ -466,6 +461,7 @@ public class ClientCnxnSocketNetty extends ClientCnxnSocket {
      * place. It mainly handles read traffic and helps synchronize connection state.
      */
     private class ZKClientHandler extends SimpleChannelInboundHandler<ByteBuf> {
+
         AtomicBoolean channelClosed = new AtomicBoolean(false);
 
         @Override
@@ -491,8 +487,7 @@ public class ClientCnxnSocketNetty extends ClientCnxnSocket {
             updateNow();
             while (buf.isReadable()) {
                 if (incomingBuffer.remaining() > buf.readableBytes()) {
-                    int newLimit = incomingBuffer.position()
-                            + buf.readableBytes();
+                    int newLimit = incomingBuffer.position() + buf.readableBytes();
                     incomingBuffer.limit(newLimit);
                 }
                 buf.readBytes(incomingBuffer);
@@ -524,9 +519,10 @@ public class ClientCnxnSocketNetty extends ClientCnxnSocket {
 
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-            LOG.warn("Exception caught", cause);
+            LOG.error("Unexpected throwable", cause);
             cleanup();
         }
+
     }
 
     /**
@@ -548,4 +544,5 @@ public class ClientCnxnSocketNetty extends ClientCnxnSocket {
     static void clearTestAllocator() {
         TEST_ALLOCATOR.set(null);
     }
+
 }

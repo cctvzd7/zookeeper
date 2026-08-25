@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,39 +18,6 @@
 
 package org.apache.zookeeper.common;
 
-import org.bouncycastle.asn1.DERIA5String;
-import org.bouncycastle.asn1.DEROctetString;
-import org.bouncycastle.asn1.pkcs.PKCSObjectIdentifiers;
-import org.bouncycastle.asn1.x500.X500Name;
-import org.bouncycastle.asn1.x509.AlgorithmIdentifier;
-import org.bouncycastle.asn1.x509.BasicConstraints;
-import org.bouncycastle.asn1.x509.ExtendedKeyUsage;
-import org.bouncycastle.asn1.x509.Extension;
-import org.bouncycastle.asn1.x509.GeneralName;
-import org.bouncycastle.asn1.x509.GeneralNames;
-import org.bouncycastle.asn1.x509.KeyPurposeId;
-import org.bouncycastle.asn1.x509.KeyUsage;
-import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo;
-import org.bouncycastle.cert.X509CertificateHolder;
-import org.bouncycastle.cert.X509v3CertificateBuilder;
-import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
-import org.bouncycastle.crypto.params.AsymmetricKeyParameter;
-import org.bouncycastle.crypto.util.PrivateKeyFactory;
-import org.bouncycastle.jce.provider.BouncyCastleProvider;
-import org.bouncycastle.openssl.jcajce.JcaPEMWriter;
-import org.bouncycastle.openssl.jcajce.JcaPKCS8Generator;
-import org.bouncycastle.openssl.jcajce.JceOpenSSLPKCS8EncryptorBuilder;
-import org.bouncycastle.operator.ContentSigner;
-import org.bouncycastle.operator.DefaultDigestAlgorithmIdentifierFinder;
-import org.bouncycastle.operator.DefaultSignatureAlgorithmIdentifierFinder;
-import org.bouncycastle.operator.OperatorCreationException;
-import org.bouncycastle.operator.OutputEncryptor;
-import org.bouncycastle.operator.bc.BcContentSignerBuilder;
-import org.bouncycastle.operator.bc.BcECContentSignerBuilder;
-import org.bouncycastle.operator.bc.BcRSAContentSignerBuilder;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.StringWriter;
@@ -69,13 +36,50 @@ import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.security.spec.ECGenParameterSpec;
 import java.security.spec.RSAKeyGenParameterSpec;
+import java.time.Duration;
 import java.util.Date;
+import org.bouncycastle.asn1.DERIA5String;
+import org.bouncycastle.asn1.DEROctetString;
+import org.bouncycastle.asn1.pkcs.PKCSObjectIdentifiers;
+import org.bouncycastle.asn1.x500.X500Name;
+import org.bouncycastle.asn1.x500.X500NameBuilder;
+import org.bouncycastle.asn1.x500.style.BCStyle;
+import org.bouncycastle.asn1.x509.AlgorithmIdentifier;
+import org.bouncycastle.asn1.x509.BasicConstraints;
+import org.bouncycastle.asn1.x509.ExtendedKeyUsage;
+import org.bouncycastle.asn1.x509.Extension;
+import org.bouncycastle.asn1.x509.GeneralName;
+import org.bouncycastle.asn1.x509.GeneralNames;
+import org.bouncycastle.asn1.x509.KeyPurposeId;
+import org.bouncycastle.asn1.x509.KeyUsage;
+import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo;
+import org.bouncycastle.cert.X509CertificateHolder;
+import org.bouncycastle.cert.X509v3CertificateBuilder;
+import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
+import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
+import org.bouncycastle.crypto.params.AsymmetricKeyParameter;
+import org.bouncycastle.crypto.util.PrivateKeyFactory;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
+import org.bouncycastle.openssl.jcajce.JcaPEMWriter;
+import org.bouncycastle.openssl.jcajce.JcaPKCS8Generator;
+import org.bouncycastle.openssl.jcajce.JceOpenSSLPKCS8EncryptorBuilder;
+import org.bouncycastle.operator.ContentSigner;
+import org.bouncycastle.operator.DefaultDigestAlgorithmIdentifierFinder;
+import org.bouncycastle.operator.DefaultSignatureAlgorithmIdentifierFinder;
+import org.bouncycastle.operator.OperatorCreationException;
+import org.bouncycastle.operator.OutputEncryptor;
+import org.bouncycastle.operator.bc.BcContentSignerBuilder;
+import org.bouncycastle.operator.bc.BcECContentSignerBuilder;
+import org.bouncycastle.operator.bc.BcRSAContentSignerBuilder;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * This class contains helper methods for creating X509 certificates and key pairs, and for serializing them
- * to JKS or PEM files.
+ * to JKS, PEM or other keystore type files.
  */
 public class X509TestHelpers {
+
     private static final Logger LOG = LoggerFactory.getLogger(X509TestHelpers.class);
 
     private static final SecureRandom PRNG = new SecureRandom();
@@ -84,6 +88,27 @@ public class X509TestHelpers {
     private static final String DEFAULT_ELLIPTIC_CURVE_NAME = "secp256r1";
     // Per RFC 5280 section 4.1.2.2, X509 certificates can use up to 20 bytes == 160 bits for serial numbers.
     private static final int SERIAL_NUMBER_MAX_BITS = 20 * Byte.SIZE;
+
+    public static X509Certificate newSelfSignedCert(String name, KeyPair keyPair) throws IOException, OperatorCreationException, GeneralSecurityException {
+        X500NameBuilder caNameBuilder = new X500NameBuilder(BCStyle.INSTANCE);
+        caNameBuilder.addRDN(BCStyle.CN, name);
+        return newSelfSignedCACert(caNameBuilder.build(), keyPair, Duration.ofDays(1).toMillis());
+    }
+
+    @FunctionalInterface
+    public interface CertificateCustomization {
+        void customize(X509v3CertificateBuilder builder) throws Exception;
+    }
+
+    public static X509Certificate newCert(X509Certificate caCert, KeyPair caKeyPair, String name, PublicKey certPublicKey, CertificateCustomization customization) throws Exception {
+        X500NameBuilder nameBuilder = new X500NameBuilder(BCStyle.INSTANCE);
+        nameBuilder.addRDN(BCStyle.CN, name);
+        return newCert(caCert, caKeyPair, nameBuilder.build(), certPublicKey, Duration.ofDays(1).toMillis(), customization);
+    }
+
+    public static X509Certificate newCert(X509Certificate caCert, KeyPair caKeyPair, String name, PublicKey certPublicKey) throws Exception {
+        return newCert(caCert, caKeyPair, name, certPublicKey, null);
+    }
 
     /**
      * Uses the private key of the given key pair to create a self-signed CA certificate with the public half of the
@@ -101,21 +126,20 @@ public class X509TestHelpers {
      * @throws GeneralSecurityException
      */
     public static X509Certificate newSelfSignedCACert(
-            X500Name subject,
-            KeyPair keyPair,
-            long expirationMillis) throws IOException, OperatorCreationException, GeneralSecurityException {
+            X500Name subject, KeyPair keyPair, long expirationMillis) throws IOException, OperatorCreationException, GeneralSecurityException {
+        return newSelfSignedCACert(subject, keyPair, expirationMillis, null);
+    }
+
+    public static X509Certificate newSelfSignedCACert(
+            X500Name subject, KeyPair keyPair, long expirationMillis, CertificateCustomization customization) throws IOException, OperatorCreationException, GeneralSecurityException {
         Date now = new Date();
-        X509v3CertificateBuilder builder = initCertBuilder(
-                subject, // for self-signed certs, issuer == subject
-                now,
-                new Date(now.getTime() + expirationMillis),
-                subject,
-                keyPair.getPublic());
+        X509v3CertificateBuilder builder = initCertBuilder(subject, // for self-signed certs, issuer == subject
+                                                           now, new Date(now.getTime()
+                                                                                 + expirationMillis), subject, keyPair.getPublic());
         builder.addExtension(Extension.basicConstraints, true, new BasicConstraints(true)); // is a CA
-        builder.addExtension(
-                Extension.keyUsage,
-                true,
-                new KeyUsage(KeyUsage.digitalSignature | KeyUsage.keyCertSign | KeyUsage.cRLSign));
+        builder.addExtension(Extension.keyUsage, true, new KeyUsage(KeyUsage.digitalSignature
+                                                                            | KeyUsage.keyCertSign
+                                                                            | KeyUsage.cRLSign));
         return buildAndSignCertificate(keyPair.getPrivate(), builder);
     }
 
@@ -135,33 +159,28 @@ public class X509TestHelpers {
      * @throws GeneralSecurityException
      */
     public static X509Certificate newCert(
-            X509Certificate caCert,
-            KeyPair caKeyPair,
-            X500Name certSubject,
-            PublicKey certPublicKey,
-            long expirationMillis) throws IOException, OperatorCreationException, GeneralSecurityException {
+            X509Certificate caCert, KeyPair caKeyPair, X500Name certSubject, PublicKey certPublicKey, long expirationMillis) throws Exception {
+        return newCert(caCert, caKeyPair, certSubject, certPublicKey, expirationMillis, null);
+    }
+
+    public static X509Certificate newCert(
+            X509Certificate caCert, KeyPair caKeyPair, X500Name certSubject, PublicKey certPublicKey, long expirationMillis, CertificateCustomization customization) throws Exception {
         if (!caKeyPair.getPublic().equals(caCert.getPublicKey())) {
             throw new IllegalArgumentException("CA private key does not match the public key in the CA cert");
         }
         Date now = new Date();
-        X509v3CertificateBuilder builder = initCertBuilder(
-                new X500Name(caCert.getIssuerDN().getName()),
-                now,
-                new Date(now.getTime() + expirationMillis),
-                certSubject,
-                certPublicKey);
+        X509v3CertificateBuilder builder = initCertBuilder(new X500Name(caCert.getIssuerX500Principal().getName()), now, new Date(
+                now.getTime()
+                        + expirationMillis), certSubject, certPublicKey);
         builder.addExtension(Extension.basicConstraints, true, new BasicConstraints(false)); // not a CA
-        builder.addExtension(
-                Extension.keyUsage, true, new KeyUsage(KeyUsage.digitalSignature | KeyUsage.keyEncipherment));
-        builder.addExtension(
-                Extension.extendedKeyUsage,
-                true,
-                new ExtendedKeyUsage(new KeyPurposeId[] { KeyPurposeId.id_kp_serverAuth, KeyPurposeId.id_kp_clientAuth }));
+        builder.addExtension(Extension.keyUsage, true, new KeyUsage(KeyUsage.digitalSignature
+                                                                            | KeyUsage.keyEncipherment));
+        builder.addExtension(Extension.extendedKeyUsage, true, new ExtendedKeyUsage(new KeyPurposeId[]{KeyPurposeId.id_kp_serverAuth, KeyPurposeId.id_kp_clientAuth}));
 
-        builder.addExtension(
-                Extension.subjectAlternativeName,
-                false,
-                getLocalhostSubjectAltNames());
+        builder.addExtension(Extension.subjectAlternativeName, false, getLocalhostSubjectAltNames());
+        if (customization != null) {
+            customization.customize(builder);
+        }
         return buildAndSignCertificate(caKeyPair.getPrivate(), builder);
     }
 
@@ -190,18 +209,8 @@ public class X509TestHelpers {
      * @return a X509v3CertificateBuilder that can be further customized to finish creating the new cert.
      */
     private static X509v3CertificateBuilder initCertBuilder(
-            X500Name issuer,
-            Date notBefore,
-            Date notAfter,
-            X500Name subject,
-            PublicKey subjectPublicKey) {
-        return new X509v3CertificateBuilder(
-                issuer,
-                new BigInteger(SERIAL_NUMBER_MAX_BITS, PRNG),
-                notBefore,
-                notAfter,
-                subject,
-                SubjectPublicKeyInfo.getInstance(subjectPublicKey.getEncoded()));
+            X500Name issuer, Date notBefore, Date notAfter, X500Name subject, PublicKey subjectPublicKey) {
+        return new JcaX509v3CertificateBuilder(issuer, new BigInteger(SERIAL_NUMBER_MAX_BITS, PRNG), notBefore, notAfter, subject, SubjectPublicKeyInfo.getInstance(subjectPublicKey.getEncoded()));
     }
 
     /**
@@ -214,17 +223,14 @@ public class X509TestHelpers {
      * @throws CertificateException
      */
     private static X509Certificate buildAndSignCertificate(
-            PrivateKey privateKey,
-            X509v3CertificateBuilder builder) throws IOException, OperatorCreationException, CertificateException {
+            PrivateKey privateKey, X509v3CertificateBuilder builder) throws IOException, OperatorCreationException, CertificateException {
         BcContentSignerBuilder signerBuilder;
         if (privateKey.getAlgorithm().contains("RSA")) { // a little hacky way to detect key type, but it works
-            AlgorithmIdentifier signatureAlgorithm = new DefaultSignatureAlgorithmIdentifierFinder().find(
-                    "SHA256WithRSAEncryption");
+            AlgorithmIdentifier signatureAlgorithm = new DefaultSignatureAlgorithmIdentifierFinder().find("SHA256WithRSAEncryption");
             AlgorithmIdentifier digestAlgorithm = new DefaultDigestAlgorithmIdentifierFinder().find(signatureAlgorithm);
             signerBuilder = new BcRSAContentSignerBuilder(signatureAlgorithm, digestAlgorithm);
         } else { // if not RSA, assume EC
-            AlgorithmIdentifier signatureAlgorithm = new DefaultSignatureAlgorithmIdentifierFinder().find(
-                    "SHA256withECDSA");
+            AlgorithmIdentifier signatureAlgorithm = new DefaultSignatureAlgorithmIdentifierFinder().find("SHA256withECDSA");
             AlgorithmIdentifier digestAlgorithm = new DefaultDigestAlgorithmIdentifierFinder().find(signatureAlgorithm);
             signerBuilder = new BcECContentSignerBuilder(signatureAlgorithm, digestAlgorithm);
         }
@@ -241,12 +247,12 @@ public class X509TestHelpers {
      */
     public static KeyPair generateKeyPair(X509KeyType keyType) throws GeneralSecurityException {
         switch (keyType) {
-            case RSA:
-                return generateRSAKeyPair();
-            case EC:
-                return generateECKeyPair();
-            default:
-                throw new IllegalArgumentException("Invalid X509KeyType");
+        case RSA:
+            return generateRSAKeyPair();
+        case EC:
+            return generateECKeyPair();
+        default:
+            throw new IllegalArgumentException("Invalid X509KeyType");
         }
     }
 
@@ -256,8 +262,7 @@ public class X509TestHelpers {
      */
     public static KeyPair generateRSAKeyPair() throws GeneralSecurityException {
         KeyPairGenerator keyGen = KeyPairGenerator.getInstance("RSA");
-        RSAKeyGenParameterSpec keyGenSpec = new RSAKeyGenParameterSpec(
-                DEFAULT_RSA_KEY_SIZE_BITS, DEFAULT_RSA_PUB_EXPONENT);
+        RSAKeyGenParameterSpec keyGenSpec = new RSAKeyGenParameterSpec(DEFAULT_RSA_KEY_SIZE_BITS, DEFAULT_RSA_PUB_EXPONENT);
         keyGen.initialize(keyGenSpec, PRNG);
         return keyGen.generateKeyPair();
     }
@@ -284,12 +289,8 @@ public class X509TestHelpers {
      * @throws OperatorCreationException if constructing the encryptor from the given password fails.
      */
     public static String pemEncodeCertAndPrivateKey(
-            X509Certificate cert,
-            PrivateKey privateKey,
-            String keyPassword) throws IOException, OperatorCreationException {
-        return pemEncodeX509Certificate(cert) +
-                "\n" +
-                pemEncodePrivateKey(privateKey, keyPassword);
+            X509Certificate cert, PrivateKey privateKey, String keyPassword) throws IOException, OperatorCreationException {
+        return pemEncodeX509Certificate(cert) + "\n" + pemEncodePrivateKey(privateKey, keyPassword);
     }
 
     /**
@@ -302,17 +303,12 @@ public class X509TestHelpers {
      * @throws OperatorCreationException if constructing the encryptor from the given password fails.
      */
     public static String pemEncodePrivateKey(
-            PrivateKey key,
-            String password) throws IOException, OperatorCreationException {
+            PrivateKey key, String password) throws IOException, OperatorCreationException {
         StringWriter stringWriter = new StringWriter();
         JcaPEMWriter pemWriter = new JcaPEMWriter(stringWriter);
         OutputEncryptor encryptor = null;
         if (password != null && password.length() > 0) {
-            encryptor = new JceOpenSSLPKCS8EncryptorBuilder(PKCSObjectIdentifiers.pbeWithSHAAnd3_KeyTripleDES_CBC)
-                    .setProvider(BouncyCastleProvider.PROVIDER_NAME)
-                    .setRandom(PRNG)
-                    .setPasssword(password.toCharArray())
-                    .build();
+            encryptor = new JceOpenSSLPKCS8EncryptorBuilder(PKCSObjectIdentifiers.pbeWithSHAAnd3_KeyTripleDES_CBC).setProvider(BouncyCastleProvider.PROVIDER_NAME).setRandom(PRNG).setPassword(password.toCharArray()).build();
         }
         pemWriter.writeObject(new JcaPKCS8Generator(key, encryptor));
         pemWriter.close();
@@ -345,12 +341,50 @@ public class X509TestHelpers {
      * @throws GeneralSecurityException
      */
     public static byte[] certToJavaTrustStoreBytes(
-            X509Certificate cert,
-            String keyPassword) throws IOException, GeneralSecurityException {
+            X509Certificate cert, String keyPassword) throws IOException, GeneralSecurityException {
         KeyStore trustStore = KeyStore.getInstance(KeyStore.getDefaultType());
+        return certToTrustStoreBytes(cert, keyPassword, trustStore);
+    }
+
+    /**
+     * Encodes the given X509Certificate as a PKCS12 TrustStore, optionally protecting the cert with a password (though
+     * it's unclear why one would do this since certificates only contain public information and do not need to be
+     * kept secret). Returns the byte array encoding of the trust store, which may be written to a file and loaded to
+     * instantiate the trust store at a later point or in another process.
+     * @param cert the certificate to serialize.
+     * @param keyPassword an optional password to encrypt the trust store. If empty or null, the cert will not be encrypted.
+     * @return the serialized bytes of the PKCS12 trust store.
+     * @throws IOException
+     * @throws GeneralSecurityException
+     */
+    public static byte[] certToPKCS12TrustStoreBytes(
+            X509Certificate cert, String keyPassword) throws IOException, GeneralSecurityException {
+        KeyStore trustStore = KeyStore.getInstance("PKCS12");
+        return certToTrustStoreBytes(cert, keyPassword, trustStore);
+    }
+
+    /**
+     * Encodes the given X509Certificate as a BCFKS TrustStore, optionally protecting the cert with a password (though
+     * it's unclear why one would do this since certificates only contain public information and do not need to be
+     * kept secret). Returns the byte array encoding of the trust store, which may be written to a file and loaded to
+     * instantiate the trust store at a later point or in another process.
+     * @param cert the certificate to serialize.
+     * @param keyPassword an optional password to encrypt the trust store. If empty or null, the cert will not be encrypted.
+     * @return the serialized bytes of the BCFKS trust store.
+     * @throws IOException
+     * @throws GeneralSecurityException
+     */
+    public static byte[] certToBCFKSTrustStoreBytes(
+      X509Certificate cert,
+      String keyPassword) throws IOException, GeneralSecurityException {
+        KeyStore trustStore = KeyStore.getInstance("BCFKS");
+        return certToTrustStoreBytes(cert, keyPassword, trustStore);
+    }
+
+    private static byte[] certToTrustStoreBytes(X509Certificate cert, String keyPassword, KeyStore trustStore) throws IOException, GeneralSecurityException {
         char[] keyPasswordChars = keyPassword == null ? new char[0] : keyPassword.toCharArray();
         trustStore.load(null, keyPasswordChars);
-        trustStore.setCertificateEntry(cert.getSubjectDN().toString(), cert);
+        trustStore.setCertificateEntry(cert.getSubjectX500Principal().toString(), cert);
         ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
         trustStore.store(outputStream, keyPasswordChars);
         outputStream.flush();
@@ -371,17 +405,52 @@ public class X509TestHelpers {
      * @throws GeneralSecurityException
      */
     public static byte[] certAndPrivateKeyToJavaKeyStoreBytes(
-            X509Certificate cert,
-            PrivateKey privateKey,
-            String keyPassword) throws IOException, GeneralSecurityException {
+            X509Certificate cert, PrivateKey privateKey, String keyPassword) throws IOException, GeneralSecurityException {
         KeyStore keyStore = KeyStore.getInstance(KeyStore.getDefaultType());
+        return certAndPrivateKeyToBytes(cert, privateKey, keyPassword, keyStore);
+    }
+
+    /**
+     * Encodes the given X509Certificate and private key as a PKCS12 KeyStore, optionally protecting the private key
+     * (and possibly the cert?) with a password. Returns the byte array encoding of the key store, which may be written
+     * to a file and loaded to instantiate the key store at a later point or in another process.
+     * @param cert the X509 certificate to serialize.
+     * @param privateKey the private key to serialize.
+     * @param keyPassword an optional key password. If empty or null, the private key will not be encrypted.
+     * @return the serialized bytes of the PKCS12 key store.
+     * @throws IOException
+     * @throws GeneralSecurityException
+     */
+    public static byte[] certAndPrivateKeyToPKCS12Bytes(
+            X509Certificate cert, PrivateKey privateKey, String keyPassword) throws IOException, GeneralSecurityException {
+        KeyStore keyStore = KeyStore.getInstance("PKCS12");
+        return certAndPrivateKeyToBytes(cert, privateKey, keyPassword, keyStore);
+    }
+
+    /**
+     * Encodes the given X509Certificate and private key as a BCFKS KeyStore, optionally protecting the private key
+     * (and possibly the cert?) with a password. Returns the byte array encoding of the key store, which may be written
+     * to a file and loaded to instantiate the key store at a later point or in another process.
+     * @param cert the X509 certificate to serialize.
+     * @param privateKey the private key to serialize.
+     * @param keyPassword an optional key password. If empty or null, the private key will not be encrypted.
+     * @return the serialized bytes of the BCFKS key store.
+     * @throws IOException
+     * @throws GeneralSecurityException
+     */
+    public static byte[] certAndPrivateKeyToBCFKSBytes(
+      X509Certificate cert,
+      PrivateKey privateKey,
+      String keyPassword) throws IOException, GeneralSecurityException {
+        KeyStore keyStore = KeyStore.getInstance("BCFKS");
+        return certAndPrivateKeyToBytes(cert, privateKey, keyPassword, keyStore);
+    }
+
+    private static byte[] certAndPrivateKeyToBytes(
+            X509Certificate cert, PrivateKey privateKey, String keyPassword, KeyStore keyStore) throws IOException, GeneralSecurityException {
         char[] keyPasswordChars = keyPassword == null ? new char[0] : keyPassword.toCharArray();
         keyStore.load(null, keyPasswordChars);
-        keyStore.setKeyEntry(
-                "key",
-                privateKey,
-                keyPasswordChars,
-                new Certificate[] { cert });
+        keyStore.setKeyEntry("key", privateKey, keyPasswordChars, new Certificate[]{cert});
         ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
         keyStore.store(outputStream, keyPasswordChars);
         outputStream.flush();
@@ -399,4 +468,5 @@ public class X509TestHelpers {
     public static X509Certificate toX509Cert(X509CertificateHolder certHolder) throws CertificateException {
         return new JcaX509CertificateConverter().setProvider(BouncyCastleProvider.PROVIDER_NAME).getCertificate(certHolder);
     }
+
 }

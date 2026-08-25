@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,11 +19,10 @@
 package org.apache.zookeeper.client;
 
 import java.io.File;
-
+import java.nio.file.Path;
 import org.apache.yetus.audience.InterfaceAudience;
-import org.apache.zookeeper.ZooKeeper;
+import org.apache.zookeeper.common.ConfigException;
 import org.apache.zookeeper.common.ZKConfig;
-import org.apache.zookeeper.server.quorum.QuorumPeerConfig.ConfigException;
 
 /**
  * Handles client specific properties
@@ -31,18 +30,15 @@ import org.apache.zookeeper.server.quorum.QuorumPeerConfig.ConfigException;
  */
 @InterfaceAudience.Public
 public class ZKClientConfig extends ZKConfig {
+
     public static final String ZK_SASL_CLIENT_USERNAME = "zookeeper.sasl.client.username";
     public static final String ZK_SASL_CLIENT_USERNAME_DEFAULT = "zookeeper";
-    public static final String ZK_SASL_CLIENT_CANONICALIZE_HOSTNAME =
-        "zookeeper.sasl.client.canonicalize.hostname";
+    public static final String ZK_SASL_CLIENT_CANONICALIZE_HOSTNAME = "zookeeper.sasl.client.canonicalize.hostname";
     public static final String ZK_SASL_CLIENT_CANONICALIZE_HOSTNAME_DEFAULT = "true";
-    @SuppressWarnings("deprecation")
-    public static final String LOGIN_CONTEXT_NAME_KEY = ZooKeeperSaslClient.LOGIN_CONTEXT_NAME_KEY;;
+    public static final String LOGIN_CONTEXT_NAME_KEY = "zookeeper.sasl.clientconfig";
     public static final String LOGIN_CONTEXT_NAME_KEY_DEFAULT = "Client";
-    @SuppressWarnings("deprecation")
-    public static final String ENABLE_CLIENT_SASL_KEY = ZooKeeperSaslClient.ENABLE_CLIENT_SASL_KEY;
-    @SuppressWarnings("deprecation")
-    public static final String ENABLE_CLIENT_SASL_DEFAULT = ZooKeeperSaslClient.ENABLE_CLIENT_SASL_DEFAULT;
+    public static final String ENABLE_CLIENT_SASL_KEY = "zookeeper.sasl.client";
+    public static final String ENABLE_CLIENT_SASL_DEFAULT = "true";
     public static final String ZOOKEEPER_SERVER_REALM = "zookeeper.server.realm";
     /**
      * This controls whether automatic watch resetting is enabled. Clients
@@ -51,30 +47,63 @@ public class ZKClientConfig extends ZKConfig {
      * "zookeeper.disableAutoWatchReset" to "true"
      */
     public static final String DISABLE_AUTO_WATCH_RESET = "zookeeper.disableAutoWatchReset";
-    @SuppressWarnings("deprecation")
-    public static final String ZOOKEEPER_CLIENT_CNXN_SOCKET = ZooKeeper.ZOOKEEPER_CLIENT_CNXN_SOCKET;
+    public static final String ZOOKEEPER_CLIENT_CNXN_SOCKET = "zookeeper.clientCnxnSocket";
     /**
      * Setting this to "true" will enable encrypted client-server communication.
      */
-    @SuppressWarnings("deprecation")
-    public static final String SECURE_CLIENT = ZooKeeper.SECURE_CLIENT;
-    public static final int CLIENT_MAX_PACKET_LENGTH_DEFAULT = 4096 * 1024; /* 4 MB */
+    public static final String SECURE_CLIENT = "zookeeper.client.secure";
+    public static final int CLIENT_MAX_PACKET_LENGTH_DEFAULT = 0xfffff; /* 1 MB */
     public static final String ZOOKEEPER_REQUEST_TIMEOUT = "zookeeper.request.timeout";
+    public static final String ZOOKEEPER_SERVER_PRINCIPAL = "zookeeper.server.principal";
     /**
      * Feature is disabled by default.
      */
     public static final long ZOOKEEPER_REQUEST_TIMEOUT_DEFAULT = 0;
+    public static final String ZK_SASL_CLIENT_ALLOW_REVERSE_DNS = "zookeeper.sasl.client.allowReverseDnsLookup";
+    public static final boolean ZK_SASL_CLIENT_ALLOW_REVERSE_DNS_DEFAULT = false;
+    /**
+     * True value preserves the old behavior is to shuffle the addresses in DNS response regardless of address type.
+     * This could help with buggy DNS servers which always return addresses in the same order, but at the same time
+     * ignores the JVM option java.net.preferIPv6Addresses.
+     */
+    public static final String ZOOKEEPER_SHUFFLE_DNS_RESPONSE = "zookeeper.shuffleDnsResponse";
+    public static final boolean ZOOKEEPER_SHUFFLE_DNS_RESPONSE_DEFAULT = false;
+
+    /**
+     * DNS SRV refresh interval in seconds for DnsSrvHostProvider.
+     * A value of 0 disables periodic refresh.
+     */
+    public static final String DNS_SRV_REFRESH_INTERVAL_SECONDS = "zookeeper.hostProvider.dnsSrvRefreshIntervalSeconds";
+    public static final long DNS_SRV_REFRESH_INTERVAL_SECONDS_DEFAULT = 60;
 
     public ZKClientConfig() {
         super();
         initFromJavaSystemProperties();
     }
 
+    /**
+     * <p><b>Use {@link ZKClientConfig#ZKClientConfig(Path configPath)} instead.</b>
+     *
+     * <p><b>The signature of this method has been changed to throw {@link ConfigException}
+     * instead of {@code QuorumPeerConfig.ConfigException}.</b>
+     */
+    @Deprecated
     public ZKClientConfig(File configFile) throws ConfigException {
         super(configFile);
     }
 
+    /**
+     * <p><b>Use {@link ZKClientConfig#ZKClientConfig(Path configPath)} instead.</b>
+     *
+     * <p><b>The signature of this method has been changed to throw {@link ConfigException}
+     * instead of {@code QuorumPeerConfig.ConfigException}.</b>
+     */
+    @Deprecated
     public ZKClientConfig(String configPath) throws ConfigException {
+        super(configPath);
+    }
+
+    public ZKClientConfig(Path configPath) throws ConfigException {
         super(configPath);
     }
 
@@ -83,8 +112,8 @@ public class ZKClientConfig extends ZKConfig {
      * java system property
      */
     private void initFromJavaSystemProperties() {
-        setProperty(ZOOKEEPER_REQUEST_TIMEOUT,
-                System.getProperty(ZOOKEEPER_REQUEST_TIMEOUT));
+        setProperty(ZOOKEEPER_REQUEST_TIMEOUT, System.getProperty(ZOOKEEPER_REQUEST_TIMEOUT));
+        setProperty(ZOOKEEPER_SERVER_PRINCIPAL, System.getProperty(ZOOKEEPER_SERVER_PRINCIPAL));
     }
 
     @Override
@@ -99,12 +128,15 @@ public class ZKClientConfig extends ZKConfig {
          * backward compatibility for client specific properties
          */
         setProperty(ZK_SASL_CLIENT_USERNAME, System.getProperty(ZK_SASL_CLIENT_USERNAME));
+        setProperty(ZK_SASL_CLIENT_CANONICALIZE_HOSTNAME, System.getProperty(ZK_SASL_CLIENT_CANONICALIZE_HOSTNAME));
         setProperty(LOGIN_CONTEXT_NAME_KEY, System.getProperty(LOGIN_CONTEXT_NAME_KEY));
         setProperty(ENABLE_CLIENT_SASL_KEY, System.getProperty(ENABLE_CLIENT_SASL_KEY));
         setProperty(ZOOKEEPER_SERVER_REALM, System.getProperty(ZOOKEEPER_SERVER_REALM));
         setProperty(DISABLE_AUTO_WATCH_RESET, System.getProperty(DISABLE_AUTO_WATCH_RESET));
         setProperty(ZOOKEEPER_CLIENT_CNXN_SOCKET, System.getProperty(ZOOKEEPER_CLIENT_CNXN_SOCKET));
         setProperty(SECURE_CLIENT, System.getProperty(SECURE_CLIENT));
+        setProperty(ZK_SASL_CLIENT_ALLOW_REVERSE_DNS, System.getProperty(ZK_SASL_CLIENT_ALLOW_REVERSE_DNS));
+        setProperty(DNS_SRV_REFRESH_INTERVAL_SECONDS, System.getProperty(DNS_SRV_REFRESH_INTERVAL_SECONDS));
     }
 
     /**
@@ -117,6 +149,14 @@ public class ZKClientConfig extends ZKConfig {
      */
     public boolean isSaslClientEnabled() {
         return Boolean.valueOf(getProperty(ENABLE_CLIENT_SASL_KEY, ENABLE_CLIENT_SASL_DEFAULT));
+    }
+
+    /**
+     * Return true if we need to use the old behavior of default DNS resolver and always shuffle the IP addresses
+     * in the DNS lookup response in order to pick a completely random IP address.
+     */
+    public boolean isShuffleDnsResponseEnabled() {
+        return getBoolean(ZOOKEEPER_SHUFFLE_DNS_RESPONSE, ZOOKEEPER_SHUFFLE_DNS_RESPONSE_DEFAULT);
     }
 
     /**
@@ -140,4 +180,5 @@ public class ZKClientConfig extends ZKConfig {
         }
         return defaultValue;
     }
+
 }

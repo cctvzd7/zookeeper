@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -33,47 +33,58 @@ public class BinaryOutputArchive implements OutputArchive {
     private ByteBuffer bb = ByteBuffer.allocate(1024);
 
     private DataOutput out;
-    
+
+    private long dataSize;
+
     public static BinaryOutputArchive getArchive(OutputStream strm) {
         return new BinaryOutputArchive(new DataOutputStream(strm));
     }
-    
-    /** Creates a new instance of BinaryOutputArchive */
+
+    /**
+     * Creates a new instance of BinaryOutputArchive.
+     */
     public BinaryOutputArchive(DataOutput out) {
         this.out = out;
     }
-    
+
     public void writeByte(byte b, String tag) throws IOException {
         out.writeByte(b);
+        dataSize += 1;
     }
-    
+
     public void writeBool(boolean b, String tag) throws IOException {
         out.writeBoolean(b);
+        dataSize += 1;
     }
-    
+
     public void writeInt(int i, String tag) throws IOException {
         out.writeInt(i);
+        dataSize += 4;
     }
-    
+
     public void writeLong(long l, String tag) throws IOException {
         out.writeLong(l);
+        dataSize += 8;
     }
-    
+
     public void writeFloat(float f, String tag) throws IOException {
         out.writeFloat(f);
+        dataSize += 4;
     }
-    
+
     public void writeDouble(double d, String tag) throws IOException {
         out.writeDouble(d);
+        dataSize += 8;
     }
-    
+
     /**
-     * create our own char encoder to utf8. This is faster 
+     * create our own char encoder to utf8. This is faster
      * then string.getbytes(UTF8).
+     *
      * @param s the string to encode into utf8
      * @return utf8 byte sequence.
      */
-    final private ByteBuffer stringToByteBuffer(CharSequence s) {
+    private ByteBuffer stringToByteBuffer(CharSequence s) {
         bb.clear();
         final int len = s.length();
         for (int i = 0; i < len; i++) {
@@ -105,42 +116,55 @@ public class BinaryOutputArchive implements OutputArchive {
             return;
         }
         ByteBuffer bb = stringToByteBuffer(s);
-        writeInt(bb.remaining(), "len");
+        int strLen = bb.remaining();
+        writeInt(strLen, "len");
         out.write(bb.array(), bb.position(), bb.limit());
+        dataSize += strLen;
     }
 
-    public void writeBuffer(byte barr[], String tag)
-    throws IOException {
-    	if (barr == null) {
-    		out.writeInt(-1);
-    		return;
-    	}
-    	out.writeInt(barr.length);
+    public void writeBuffer(byte[] barr, String tag)
+            throws IOException {
+        if (barr == null) {
+            writeInt(-1, "len");
+            return;
+        }
+        int len = barr.length;
+        writeInt(len, "len");
         out.write(barr);
+        dataSize += len;
     }
-    
+
     public void writeRecord(Record r, String tag) throws IOException {
         r.serialize(this, tag);
     }
-    
-    public void startRecord(Record r, String tag) throws IOException {}
-    
-    public void endRecord(Record r, String tag) throws IOException {}
-    
-    public void startVector(List<?> v, String tag) throws IOException {
-    	if (v == null) {
-    		writeInt(-1, tag);
-    		return;
-    	}
-        writeInt(v.size(), tag);
-    }
-    
-    public void endVector(List<?> v, String tag) throws IOException {}
 
-    public void startMap(TreeMap<?,?> v, String tag) throws IOException {
+    public void startRecord(Record r, String tag) throws IOException {
+    }
+
+    public void endRecord(Record r, String tag) throws IOException {
+    }
+
+    public void startVector(List<?> v, String tag) throws IOException {
+        if (v == null) {
+            writeInt(-1, tag);
+            return;
+        }
         writeInt(v.size(), tag);
     }
-    
-    public void endMap(TreeMap<?,?> v, String tag) throws IOException {}
-    
+
+    public void endVector(List<?> v, String tag) throws IOException {
+    }
+
+    public void startMap(TreeMap<?, ?> v, String tag) throws IOException {
+        writeInt(v.size(), tag);
+    }
+
+    public void endMap(TreeMap<?, ?> v, String tag) throws IOException {
+    }
+
+    @Override
+    public long getDataSize() {
+        return dataSize;
+    }
+
 }

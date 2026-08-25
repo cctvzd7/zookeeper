@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -20,7 +20,6 @@ package org.apache.zookeeper;
 
 import java.util.HashMap;
 import java.util.Map;
-
 import javax.security.auth.login.AppConfigurationEntry;
 import javax.security.auth.login.AppConfigurationEntry.LoginModuleControlFlag;
 
@@ -32,11 +31,11 @@ import javax.security.auth.login.AppConfigurationEntry.LoginModuleControlFlag;
  * Example:
  *   jaas = new JaasConfiguration();
  *   jaas.addSection("Server", "org.apache.zookeeper.server.auth.DigestLoginModule",
- *                   "username", "passowrd");
+ *                   "username", "password");
  */
 public class JaasConfiguration extends javax.security.auth.login.Configuration {
-    private final Map<String, AppConfigurationEntry[]> sections =
-      new HashMap<String, AppConfigurationEntry[]>();
+
+    private final Map<String, AppConfigurationEntry[]> sections = new HashMap<>();
 
     public JaasConfiguration() {
     }
@@ -48,7 +47,7 @@ public class JaasConfiguration extends javax.security.auth.login.Configuration {
      * @param args login key/value args
      */
     public void addSection(String name, String loginModuleName, String... args) {
-        Map<String, String> conf = new HashMap<String, String>();
+        Map<String, String> conf = new HashMap<>();
         // loop through the args (must be key/value sequence)
         for (int i = 0; i < args.length - 1; i += 2) {
             conf.put(args[i], args[i + 1]);
@@ -62,7 +61,7 @@ public class JaasConfiguration extends javax.security.auth.login.Configuration {
      * @param loginModuleName Login module name
      * @param conf login key/value args
      */
-    public void addSection(String name, String loginModuleName, final Map<String,String> conf) {
+    public void addSection(String name, String loginModuleName, final Map<String, String> conf) {
         AppConfigurationEntry[] entries = new AppConfigurationEntry[1];
         entries[0] = new AppConfigurationEntry(loginModuleName, LoginModuleControlFlag.REQUIRED, conf);
         this.sections.put(name, entries);
@@ -72,4 +71,5 @@ public class JaasConfiguration extends javax.security.auth.login.Configuration {
     public AppConfigurationEntry[] getAppConfigurationEntry(String appName) {
         return sections.get(appName);
     }
+
 }

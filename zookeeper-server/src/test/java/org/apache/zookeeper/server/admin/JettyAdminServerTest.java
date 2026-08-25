@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,46 +18,169 @@
 
 package org.apache.zookeeper.server.admin;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
-import java.net.MalformedURLException;
+import java.net.HttpURLConnection;
+import java.net.SocketException;
 import java.net.URL;
-
+import java.nio.file.Path;
+import java.security.GeneralSecurityException;
+import java.security.KeyStore;
+import java.security.KeyStoreException;
+import java.security.NoSuchAlgorithmException;
+import java.security.Security;
+import java.security.UnrecoverableKeyException;
+import java.security.cert.CertificateException;
+import java.security.cert.X509Certificate;
+import javax.net.ssl.HostnameVerifier;
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.KeyManager;
+import javax.net.ssl.KeyManagerFactory;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLHandshakeException;
+import javax.net.ssl.SSLSession;
+import javax.net.ssl.SSLSocket;
+import javax.net.ssl.SSLSocketFactory;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.TrustManagerFactory;
+import javax.net.ssl.X509TrustManager;
 import org.apache.zookeeper.PortAssignment;
 import org.apache.zookeeper.ZKTestCase;
+import org.apache.zookeeper.common.KeyStoreFileType;
+import org.apache.zookeeper.common.SecretUtilsTest;
+import org.apache.zookeeper.common.X509Exception.SSLContextException;
+import org.apache.zookeeper.common.X509KeyType;
+import org.apache.zookeeper.common.X509TestContext;
 import org.apache.zookeeper.server.ZooKeeperServerMainTest;
 import org.apache.zookeeper.server.admin.AdminServer.AdminServerException;
 import org.apache.zookeeper.server.quorum.QuorumPeerTestBase;
 import org.apache.zookeeper.test.ClientBase;
-import org.junit.Assert;
-import org.junit.Before;
-import org.junit.Test;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class JettyAdminServerTest extends ZKTestCase{
+public class JettyAdminServerTest extends ZKTestCase {
+
     protected static final Logger LOG = LoggerFactory.getLogger(JettyAdminServerTest.class);
 
-    private static final String URL_FORMAT = "http://localhost:%d/commands";
-    private static final int jettyAdminPort = PortAssignment.unique();
+    static final String URL_FORMAT = "http://localhost:%d/commands";
+    static final String HTTPS_URL_FORMAT = "https://localhost:%d/commands";
+    private final int jettyAdminPort = PortAssignment.unique();
+    private static final String KEYSTORE_TYPE_JKS = "JKS";
+    private String keyStorePath;
+    private String trustStorePath;
 
-    @Before
+    @BeforeEach
     public void enableServer() {
         // Override setting in ZKTestCase
         System.setProperty("zookeeper.admin.enableServer", "true");
         System.setProperty("zookeeper.admin.serverPort", "" + jettyAdminPort);
     }
 
+    @BeforeEach
+    public void setupEncryption(@TempDir File tempDir) {
+        Security.addProvider(new BouncyCastleProvider());
+        X509TestContext x509TestContext = null;
+        try {
+            x509TestContext = X509TestContext.newBuilder()
+                                             .setTempDir(tempDir)
+                                             .setKeyStorePassword("")
+                                             .setKeyStoreKeyType(X509KeyType.EC)
+                                             .setTrustStorePassword("")
+                                             .setTrustStoreKeyType(X509KeyType.EC)
+                                             .build();
+            keyStorePath = x509TestContext.getKeyStoreFile(KeyStoreFileType.JKS).getAbsolutePath();
+            trustStorePath = x509TestContext.getTrustStoreFile(KeyStoreFileType.JKS).getAbsolutePath();
+            System.setProperty(
+                "zookeeper.ssl.quorum.keyStore.location",
+                x509TestContext.getKeyStoreFile(KeyStoreFileType.PEM).getAbsolutePath());
+            System.setProperty(
+                "zookeeper.ssl.quorum.trustStore.location",
+                x509TestContext.getTrustStoreFile(KeyStoreFileType.PEM).getAbsolutePath());
+        } catch (Exception e) {
+            LOG.info("Problems encountered while setting up encryption for Jetty admin server test", e);
+        }
+        System.setProperty("zookeeper.ssl.quorum.keyStore.password", "");
+        System.setProperty("zookeeper.ssl.quorum.keyStore.type", "PEM");
+        System.setProperty("zookeeper.ssl.quorum.trustStore.password", "");
+        System.setProperty("zookeeper.ssl.quorum.trustStore.type", "PEM");
+        System.setProperty("zookeeper.admin.portUnification", "true");
+
+        // Create a trust manager that does not validate certificate chains
+        TrustManager[] trustAllCerts = new TrustManager[]{new X509TrustManager() {
+            public java.security.cert.X509Certificate[] getAcceptedIssuers() {
+                return null;
+            }
+            public void checkClientTrusted(X509Certificate[] certs, String authType) {
+            }
+            public void checkServerTrusted(X509Certificate[] certs, String authType) {
+            }
+        }};
+
+        // Create all-trusting trust manager
+        SSLContext sc = null;
+        try {
+            sc = SSLContext.getInstance("SSL");
+            sc.init(null, trustAllCerts, new java.security.SecureRandom());
+        } catch (Exception e) {
+            LOG.error("Failed to customize encryption for HTTPS", e);
+        }
+
+        // Create all-trusting hostname verifier
+        HostnameVerifier allValid = new HostnameVerifier() {
+            public boolean verify(String hostname, SSLSession session) {
+                return true;
+            }
+        };
+
+        // This is a temporary fix while we do not yet have certificates set up to make
+        // HTTPS requests correctly. This is equivalent to the "-k" option in curl.
+        HttpsURLConnection.setDefaultSSLSocketFactory(sc.getSocketFactory());
+        HttpsURLConnection.setDefaultHostnameVerifier(allValid);
+    }
+
+    @AfterEach
+    public void cleanUp() {
+        Security.removeProvider("BC");
+
+        System.clearProperty("zookeeper.admin.enableServer");
+        System.clearProperty("zookeeper.admin.serverPort");
+
+        System.clearProperty("zookeeper.ssl.quorum.keyStore.location");
+        System.clearProperty("zookeeper.ssl.quorum.keyStore.password");
+        System.clearProperty("zookeeper.ssl.quorum.keyStore.passwordPath");
+        System.clearProperty("zookeeper.ssl.quorum.keyStore.type");
+        System.clearProperty("zookeeper.ssl.quorum.trustStore.location");
+        System.clearProperty("zookeeper.ssl.quorum.trustStore.password");
+        System.clearProperty("zookeeper.ssl.quorum.trustStore.passwordPath");
+        System.clearProperty("zookeeper.ssl.quorum.trustStore.type");
+        System.clearProperty("zookeeper.ssl.quorum.ciphersuites");
+        System.clearProperty("zookeeper.ssl.quorum.enabledProtocols");
+        System.clearProperty("zookeeper.admin.portUnification");
+        System.clearProperty("zookeeper.admin.forceHttps");
+    }
+
     /**
      * Tests that we can start and query a JettyAdminServer.
      */
     @Test
-    public void testJettyAdminServer() throws AdminServerException, IOException {
-        JettyAdminServer server = new JettyAdminServer();;
+    public void testJettyAdminServer() throws AdminServerException, IOException, SSLContextException, GeneralSecurityException {
+        JettyAdminServer server = new JettyAdminServer();
         try {
             server.start();
             queryAdminServer(jettyAdminPort);
+            traceAdminServer(jettyAdminPort);
         } finally {
             server.shutdown();
         }
@@ -75,17 +198,15 @@ public class JettyAdminServerTest extends ZKTestCase{
         ZooKeeperServerMainTest.MainThread main = new ZooKeeperServerMainTest.MainThread(CLIENT_PORT, false, null);
         main.start();
 
-        Assert.assertTrue("waiting for server being up",
-                ClientBase.waitForServerUp("127.0.0.1:" + CLIENT_PORT,
-                ClientBase.CONNECTION_TIMEOUT));
+        assertTrue(ClientBase.waitForServerUp("127.0.0.1:" + CLIENT_PORT, ClientBase.CONNECTION_TIMEOUT),
+                "waiting for server being up");
 
         queryAdminServer(jettyAdminPort);
 
         main.shutdown();
 
-        Assert.assertTrue("waiting for server down",
-                ClientBase.waitForServerDown("127.0.0.1:" + CLIENT_PORT,
-                        ClientBase.CONNECTION_TIMEOUT));
+        assertTrue(ClientBase.waitForServerDown("127.0.0.1:" + CLIENT_PORT, ClientBase.CONNECTION_TIMEOUT),
+                "waiting for server down");
     }
 
     /**
@@ -101,13 +222,15 @@ public class JettyAdminServerTest extends ZKTestCase{
         final int ADMIN_SERVER_PORT1 = PortAssignment.unique();
         final int ADMIN_SERVER_PORT2 = PortAssignment.unique();
 
-        String quorumCfgSection = String.format
-            ("server.1=127.0.0.1:%d:%d;%d\nserver.2=127.0.0.1:%d:%d;%d",
-             PortAssignment.unique(), PortAssignment.unique(), CLIENT_PORT_QP1,
-             PortAssignment.unique(), PortAssignment.unique(), CLIENT_PORT_QP2
-            );
-        QuorumPeerTestBase.MainThread q1 = new QuorumPeerTestBase.MainThread(
-                1, CLIENT_PORT_QP1, ADMIN_SERVER_PORT1, quorumCfgSection, null);
+        String quorumCfgSection = String.format(
+            "server.1=127.0.0.1:%d:%d;%d\nserver.2=127.0.0.1:%d:%d;%d",
+            PortAssignment.unique(),
+            PortAssignment.unique(),
+            CLIENT_PORT_QP1,
+            PortAssignment.unique(),
+            PortAssignment.unique(),
+            CLIENT_PORT_QP2);
+        QuorumPeerTestBase.MainThread q1 = new QuorumPeerTestBase.MainThread(1, CLIENT_PORT_QP1, ADMIN_SERVER_PORT1, quorumCfgSection, null);
         q1.start();
 
         // Since JettyAdminServer reads a system property to determine its port,
@@ -115,18 +238,15 @@ public class JettyAdminServerTest extends ZKTestCase{
         // again with the second port number
         Thread.sleep(500);
 
-        QuorumPeerTestBase.MainThread q2 = new QuorumPeerTestBase.MainThread(
-                2, CLIENT_PORT_QP2, ADMIN_SERVER_PORT2, quorumCfgSection, null);
+        QuorumPeerTestBase.MainThread q2 = new QuorumPeerTestBase.MainThread(2, CLIENT_PORT_QP2, ADMIN_SERVER_PORT2, quorumCfgSection, null);
         q2.start();
 
         Thread.sleep(500);
 
-        Assert.assertTrue("waiting for server 1 being up",
-                ClientBase.waitForServerUp("127.0.0.1:" + CLIENT_PORT_QP1,
-                ClientBase.CONNECTION_TIMEOUT));
-        Assert.assertTrue("waiting for server 2 being up",
-                        ClientBase.waitForServerUp("127.0.0.1:" + CLIENT_PORT_QP2,
-                        ClientBase.CONNECTION_TIMEOUT));
+        assertTrue(ClientBase.waitForServerUp("127.0.0.1:" + CLIENT_PORT_QP1, ClientBase.CONNECTION_TIMEOUT),
+                "waiting for server 1 being up");
+        assertTrue(ClientBase.waitForServerUp("127.0.0.1:" + CLIENT_PORT_QP2, ClientBase.CONNECTION_TIMEOUT),
+                "waiting for server 2 being up");
 
         queryAdminServer(ADMIN_SERVER_PORT1);
         queryAdminServer(ADMIN_SERVER_PORT2);
@@ -134,29 +254,202 @@ public class JettyAdminServerTest extends ZKTestCase{
         q1.shutdown();
         q2.shutdown();
 
-        Assert.assertTrue("waiting for server 1 down",
-                ClientBase.waitForServerDown("127.0.0.1:" + CLIENT_PORT_QP1,
-                        ClientBase.CONNECTION_TIMEOUT));
-        Assert.assertTrue("waiting for server 2 down",
-                ClientBase.waitForServerDown("127.0.0.1:" + CLIENT_PORT_QP2,
-                        ClientBase.CONNECTION_TIMEOUT));
+        assertTrue(ClientBase.waitForServerDown("127.0.0.1:" + CLIENT_PORT_QP1, ClientBase.CONNECTION_TIMEOUT),
+                "waiting for server 1 down");
+        assertTrue(ClientBase.waitForServerDown("127.0.0.1:" + CLIENT_PORT_QP2, ClientBase.CONNECTION_TIMEOUT),
+                "waiting for server 2 down");
+    }
+
+    @Test
+    public void testForceHttpsPortUnificationEnabled() throws Exception {
+        testForceHttps(true);
+    }
+
+    @Test
+    public void testForceHttpsPortUnificationDisabled() throws Exception {
+        testForceHttps(false);
+    }
+
+    @Test
+    public void testForceHttps_withWrongPasswordFromFile() throws Exception {
+        final Path secretFile = SecretUtilsTest.createSecretFile("" + "wrong");
+
+        System.setProperty("zookeeper.ssl.quorum.keyStore.passwordPath", secretFile.toString());
+        System.setProperty("zookeeper.ssl.quorum.trustStore.passwordPath", secretFile.toString());
+
+        assertThrows(IOException.class, () -> testForceHttps(false));
+    }
+
+    private void testForceHttps(boolean portUnification) throws Exception {
+        System.setProperty("zookeeper.admin.forceHttps", "true");
+        System.setProperty("zookeeper.admin.portUnification", String.valueOf(portUnification));
+        boolean httpsPassed = false;
+
+        JettyAdminServer server = new JettyAdminServer();
+        try {
+            server.start();
+            queryAdminServer(String.format(HTTPS_URL_FORMAT, jettyAdminPort), true);
+            httpsPassed = true;
+            queryAdminServer(String.format(URL_FORMAT, jettyAdminPort), false);
+            fail("http call should have failed since forceHttps=true");
+        } catch (SocketException se) {
+            //good
+        } finally {
+            server.shutdown();
+        }
+        assertTrue(httpsPassed);
     }
 
     /**
      * Check that we can load the commands page of an AdminServer running at
      * localhost:port. (Note that this should work even if no zk server is set.)
      */
-    private void queryAdminServer(int port) throws MalformedURLException, IOException {
-        queryAdminServer(String.format(URL_FORMAT, port));
+    private void queryAdminServer(int port) throws IOException, SSLContextException {
+        queryAdminServer(String.format(URL_FORMAT, port), false);
+        queryAdminServer(String.format(HTTPS_URL_FORMAT, port), true);
     }
 
     /**
      * Check that loading urlStr results in a non-zero length response.
      */
-    private void queryAdminServer(String urlStr) throws MalformedURLException, IOException {
+    private void queryAdminServer(String urlStr, boolean encrypted) throws IOException, SSLContextException {
         URL url = new URL(urlStr);
-        BufferedReader dis = new BufferedReader(new InputStreamReader((url.openStream())));
+        BufferedReader dis;
+        if (!encrypted) {
+            dis = new BufferedReader(new InputStreamReader((url.openStream())));
+        } else {
+            HttpsURLConnection conn = (HttpsURLConnection) url.openConnection();
+            dis = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+        }
         String line = dis.readLine();
-        Assert.assertTrue(line.length() > 0);
+        assertTrue(line.length() > 0);
+    }
+
+    @Test
+    public void testHandshakeWithSupportedProtocol() throws Exception {
+        System.setProperty("zookeeper.admin.forceHttps", "true");
+        System.setProperty("zookeeper.ssl.quorum.enabledProtocols", "TLSv1.3");
+
+        JettyAdminServer server = new JettyAdminServer();
+        try {
+            server.start();
+
+            // Use a raw SSLSocket to verify the handshake
+            SSLContext sslContext = createSSLContext(keyStorePath, "".toCharArray(), trustStorePath, "TLSv1.3");
+            SSLSocketFactory factory = sslContext.getSocketFactory();
+
+            try (SSLSocket socket = (SSLSocket) factory.createSocket("localhost", jettyAdminPort)) {
+                socket.startHandshake();
+                String negotiatedProtocol = socket.getSession().getProtocol();
+
+                // Verify that we actually landed on the protocol we expected
+                assertEquals("TLSv1.3", negotiatedProtocol,
+                        "The negotiated protocol should be TLSv1.3.");
+            }
+        } finally {
+            server.shutdown();
+        }
+    }
+
+    @Test
+    public void testHandshakeWithUnsupportedProtocolFails() throws Exception {
+        System.setProperty("zookeeper.admin.forceHttps", "true");
+        System.setProperty("zookeeper.ssl.quorum.enabledProtocols", "TLSv1.3");
+
+        JettyAdminServer server = new JettyAdminServer();
+        try {
+            server.start();
+
+            SSLContext sslContext = createSSLContext(keyStorePath, "".toCharArray(), trustStorePath, "TLSv1.1");
+            SSLSocketFactory factory = sslContext.getSocketFactory();
+
+            try (SSLSocket socket = (SSLSocket) factory.createSocket("localhost", jettyAdminPort)) {
+                SSLHandshakeException exception = assertThrows(SSLHandshakeException.class, socket::startHandshake);
+                assertEquals(
+                        "No appropriate protocol (protocol is disabled or cipher suites are inappropriate)",
+                        exception.getMessage(),
+                        "The handshake should have failed due to a protocol mismatch.");
+            }
+        } finally {
+            server.shutdown();
+        }
+    }
+
+    @Test
+    public void testCipherMismatchFails() throws Exception {
+        System.setProperty("zookeeper.admin.forceHttps", "true");
+        System.setProperty("zookeeper.ssl.quorum.ciphersuites", "TLS_AES_128_GCM_SHA256,TLS_AES_256_GCM_SHA384");
+
+        JettyAdminServer server = new JettyAdminServer();
+        try {
+            server.start();
+
+            SSLContext sslContext = createSSLContext(keyStorePath, "".toCharArray(), trustStorePath, "TLSv1.2");
+            SSLSocketFactory factory = sslContext.getSocketFactory();
+
+            try (SSLSocket socket = (SSLSocket) factory.createSocket("localhost", jettyAdminPort)) {
+                // Force the client to use a cipher NOT enabled for the AdminServer
+                String[] unsupportedCiphers = new String[]{"TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA"};
+                socket.setEnabledCipherSuites(unsupportedCiphers);
+
+                assertThrows(SSLHandshakeException.class, socket::startHandshake,
+                        "The handshake should have failed due to a cipher mismatch.");
+            }
+        } finally {
+            server.shutdown();
+        }
+    }
+
+    private SSLContext createSSLContext(String keystorePath, char[] password, String trustStorePath, String protocol)
+            throws Exception {
+        KeyManager[] keyManagers = getKeyManagers(keystorePath, password);
+        TrustManager[] trustManagers = getTrustManagers(trustStorePath, password);
+
+        SSLContext sslContext = SSLContext.getInstance(protocol);
+        sslContext.init(keyManagers, trustManagers, null);
+
+        return sslContext;
+    }
+
+    private static KeyManager[] getKeyManagers(String keystorePath, char[] password) throws KeyStoreException,
+            IOException, NoSuchAlgorithmException, CertificateException, UnrecoverableKeyException {
+        KeyStore keyStore = KeyStore.getInstance(KEYSTORE_TYPE_JKS);
+        try (FileInputStream fis = new FileInputStream(keystorePath)) {
+            keyStore.load(fis, password);
+        }
+
+        KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+        kmf.init(keyStore, password);
+        return kmf.getKeyManagers();
+    }
+
+    public TrustManager[] getTrustManagers(String trustStorePath, char[] password) throws Exception {
+        KeyStore trustStore = KeyStore.getInstance(KEYSTORE_TYPE_JKS);
+        try (FileInputStream fis = new FileInputStream(trustStorePath)) {
+            trustStore.load(fis, password);
+        }
+
+        TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+        tmf.init(trustStore);
+
+        return tmf.getTrustManagers();
+    }
+
+    /**
+     * Using TRACE method to visit admin server
+     */
+    private void traceAdminServer(int port) throws IOException {
+      traceAdminServer(String.format(URL_FORMAT, port));
+      traceAdminServer(String.format(HTTPS_URL_FORMAT, port));
+    }
+
+    /**
+     * Using TRACE method to visit admin server, the response should be 403 forbidden
+     */
+    private void traceAdminServer(String urlStr) throws IOException {
+        HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
+        conn.setRequestMethod("TRACE");
+        conn.connect();
+        assertEquals(HttpURLConnection.HTTP_FORBIDDEN, conn.getResponseCode());
     }
 }

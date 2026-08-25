@@ -32,8 +32,16 @@
 #include <ws2tcpip.h> /* for struct sock_addr and socklen_t */
 #endif
 
+#ifdef HAVE_OPENSSL_H
+#include <openssl/ossl_typ.h>
+#endif
+
 #include <stdio.h>
 #include <ctype.h>
+
+#ifdef HAVE_CYRUS_SASL_H
+#include <sasl/sasl.h>
+#endif /* HAVE_CYRUS_SASL_H */
 
 #include "proto.h"
 #include "zookeeper_version.h"
@@ -100,12 +108,13 @@ enum ZOO_ERRORS {
   ZBADARGUMENTS = -8, /*!< Invalid arguments */
   ZINVALIDSTATE = -9, /*!< Invliad zhandle state */
   ZNEWCONFIGNOQUORUM = -13, /*!< No quorum of new config is connected and
-                                 up-to-date with the leader of last commmitted
+                                 up-to-date with the leader of last committed
                                  config - try invoking reconfiguration after new
                                  servers are connected and synced */
   ZRECONFIGINPROGRESS = -14, /*!< Reconfiguration requested while another
                                   reconfiguration is currently in progress. This
                                   is currently not supported. Please retry. */
+  ZSSLCONNECTIONERROR = -15, /*!< The SSL connection Error */
 
   /** API errors.
    * This is never thrown by the server, it shouldn't be used other than
@@ -130,7 +139,11 @@ enum ZOO_ERRORS {
   ZNOTREADONLY = -119, /*!< state-changing request is passed to read-only server */
   ZEPHEMERALONLOCALSESSION = -120, /*!< Attempt to create ephemeral node on a local session */
   ZNOWATCHER = -121, /*!< The watcher couldn't be found */
-  ZRECONFIGDISABLED = -123 /*!< Attempts to perform a reconfiguration operation when reconfiguration feature is disabled */
+  ZRECONFIGDISABLED = -123, /*!< Attempts to perform a reconfiguration operation when reconfiguration feature is disabled */
+  ZSESSIONCLOSEDREQUIRESASLAUTH = -124, /*!< The session has been closed by server because server requires client to do authentication via configured authentication scheme at server, but client is not configured with required authentication scheme or configured but failed (i.e. wrong credential used.). */
+  ZTHROTTLEDOP = -127 /*!< Operation was throttled and not executed at all. please, retry! */
+
+  /* when adding/changing values here also update zerror(int) to return correct error message */
 };
 
 #ifdef __cplusplus
@@ -189,15 +202,24 @@ extern ZOOAPI const int ZOOKEEPER_READ;
 // @}
 
 /**
- * @name Create Flags
+ * @name Create Mode
  *
- * These flags are used by zoo_create to affect node create. They may
- * be ORed together to combine effects.
+ * These modes are used by zoo_create to affect node create.
  */
 // @{
+extern ZOOAPI const int ZOO_PERSISTENT;
 extern ZOOAPI const int ZOO_EPHEMERAL;
-extern ZOOAPI const int ZOO_SEQUENCE;
+extern ZOOAPI const int ZOO_PERSISTENT_SEQUENTIAL;
+extern ZOOAPI const int ZOO_EPHEMERAL_SEQUENTIAL;
 extern ZOOAPI const int ZOO_CONTAINER;
+extern ZOOAPI const int ZOO_PERSISTENT_WITH_TTL;
+extern ZOOAPI const int ZOO_PERSISTENT_SEQUENTIAL_WITH_TTL;
+
+/**
+ * \deprecated ZOO_SEQUENCE Create Flag has been deprecated. Use ZOO_PERSISTENT_SEQUENTIAL
+ * or ZOO_EPHEMERAL_SEQUENTIAL instead of it.
+ */
+extern ZOOAPI const int ZOO_SEQUENCE;
 // @}
 
 /**
@@ -275,6 +297,34 @@ extern ZOOAPI const int ZOO_NOTWATCHING_EVENT;
 typedef struct _zhandle zhandle_t;
 
 /**
+ * This structure represents the certificates to zookeeper.
+ */
+typedef struct _zcert {
+    char *certstr;
+    char *ca;
+    char *cert;
+    char *key;
+    char *passwd;
+} zcert_t;
+
+/**
+ * This structure represents the socket to zookeeper.
+ */
+typedef struct _zsock {
+#ifdef WIN32
+    SOCKET sock;
+#else
+    int sock;
+#endif
+    zcert_t *cert;
+#ifdef HAVE_OPENSSL_H
+    SSL *ssl_sock;
+    SSL_CTX *ssl_ctx;
+#endif
+} zsock_t;
+
+
+/**
  * \brief client id structure.
  *
  * This structure holds the id and password for the session. This structure
@@ -307,6 +357,7 @@ typedef struct zoo_op {
             int buflen;
             const struct ACL_vector *acl;
             int flags;
+            int64_t ttl;
         } create_op;
 
         // DELETE
@@ -344,8 +395,7 @@ typedef struct zoo_op {
  * \param valuelen The number of bytes in data. To set the data to be NULL use
  * value as NULL and valuelen as -1.
  * \param acl The initial ACL of the node. The ACL must not be null or empty.
- * \param flags this parameter can be set to 0 for normal create or an OR
- *    of the Create Flags
+ * \param mode this parameter should be one of the Create Modes.
  * \param path_buffer Buffer which will be filled with the path of the
  *    new node (this might be different than the supplied path
  *    because of the ZOO_SEQUENCE flag).  The path string will always be
@@ -357,7 +407,7 @@ typedef struct zoo_op {
  *    The path string will always be null-terminated.
  */
 void zoo_create_op_init(zoo_op_t *op, const char *path, const char *value,
-        int valuelen,  const struct ACL_vector *acl, int flags,
+        int valuelen,  const struct ACL_vector *acl, int mode,
         char *path_buffer, int path_buffer_len);
 
 /**
@@ -486,6 +536,45 @@ typedef void (*log_callback_fn)(const char *message);
 ZOOAPI zhandle_t *zookeeper_init(const char *host, watcher_fn fn,
   int recv_timeout, const clientid_t *clientid, void *context, int flags);
 
+#ifdef HAVE_OPENSSL_H
+/**
+ * \brief create a handle to communicate with zookeeper using SSL.
+ *
+ * This method creates a new handle and a zookeeper session that corresponds
+ * to that handle. Session establishment is asynchronous, meaning that the
+ * session should not be considered established until (and unless) an
+ * event of state ZOO_CONNECTED_STATE is received.
+ * \param host comma separated host:port pairs, each corresponding to a zk
+ *   server. e.g. "127.0.0.1:3000,127.0.0.1:3001,127.0.0.1:3002"
+ * \param cert SSL certificate string. Two formats are supported: server CA
+ *   only e.g. "/path/to/server_ca.cer" and server CA with client certificate e.g.
+ *   "/path/to/server_ca.cer,/path/to/client_cert.pem,/path/to/client_cert.key,client_cert_password".
+ * \param fn the global watcher callback function. When notifications are
+ *   triggered this function will be invoked.
+ * \param recv_timeout the timeout for the zookeeper session.
+ * \param clientid the id of a previously established session that this
+ *   client will be reconnecting to. Pass 0 if not reconnecting to a previous
+ *   session. Clients can access the session id of an established, valid,
+ *   connection by calling \ref zoo_client_id. If the session corresponding to
+ *   the specified clientid has expired, or if the clientid is invalid for
+ *   any reason, the returned zhandle_t will be invalid -- the zhandle_t
+ *   state will indicate the reason for failure (typically
+ *   ZOO_EXPIRED_SESSION_STATE).
+ * \param context the handback object that will be associated with this instance
+ *   of zhandle_t. Application can access it (for example, in the watcher
+ *   callback) using \ref zoo_get_context. The object is not used by zookeeper
+ *   internally and can be null.
+ * \param flags reserved for future use. Should be set to zero.
+ * \return a pointer to the opaque zhandle structure. If it fails to create
+ * a new zhandle the function returns NULL and the errno variable
+ * indicates the reason.
+ */
+ZOOAPI zhandle_t *zookeeper_init_ssl(const char *host, const char *cert, watcher_fn fn,
+  int recv_timeout, const clientid_t *clientid, void *context, int flags);
+#endif
+
+ZOOAPI void close_zsock(zsock_t *zsock);
+
 /**
  * \brief create a handle to communicate with zookeeper.
  *
@@ -525,6 +614,170 @@ ZOOAPI zhandle_t *zookeeper_init2(const char *host, watcher_fn fn,
   int recv_timeout, const clientid_t *clientid, void *context, int flags,
   log_callback_fn log_callback);
 
+#ifdef HAVE_CYRUS_SASL_H
+
+/**
+ * \brief zoo_sasl_params structure.
+ *
+ * This structure holds the SASL parameters for the connection.
+ *
+ * Its \c service, \c host and \c callbacks fields are used with Cyrus
+ * SASL's \c sasl_client_new; its \c mechlist field with \c
+ * sasl_client_start.  Please refer to these functions for precise
+ * semantics.
+ *
+ * Note while "string" parameters are copied into the ZooKeeper
+ * client, the callbacks array is simply referenced: its lifetime must
+ * therefore cover that of the handle.
+ */
+typedef struct zoo_sasl_params {
+  const char *service;          /*!< The service name, usually "zookeeper" */
+  const char *host;             /*!< The server name, e.g. "zk-sasl-md5" */
+  const char *mechlist;         /*!< Mechanisms to try, e.g. "DIGEST-MD5" */
+  const sasl_callback_t *callbacks;  /*!< List of callbacks */
+} zoo_sasl_params_t;
+
+/**
+ * \brief create a handle to communicate with zookeeper.
+ *
+ * This function is identical to \ref zookeeper_init2 except that it
+ * allows specifying optional SASL connection parameters.  It is only
+ * available if the client library was configured to link against the
+ * Cyrus SASL library, and only visible when \c HAVE_CYRUS_SASL_H is defined.
+ *
+ * This method creates a new handle and a zookeeper session that corresponds
+ * to that handle. Session establishment is asynchronous, meaning that the
+ * session should not be considered established until (and unless) an
+ * event of state ZOO_CONNECTED_STATE is received.
+ * \param host comma separated host:port pairs, each corresponding to a zk
+ *   server. e.g. "127.0.0.1:3000,127.0.0.1:3001,127.0.0.1:3002"
+ * \param fn the global watcher callback function. When notifications are
+ *   triggered this function will be invoked.
+ * \param clientid the id of a previously established session that this
+ *   client will be reconnecting to. Pass 0 if not reconnecting to a previous
+ *   session. Clients can access the session id of an established, valid,
+ *   connection by calling \ref zoo_client_id. If the session corresponding to
+ *   the specified clientid has expired, or if the clientid is invalid for
+ *   any reason, the returned zhandle_t will be invalid -- the zhandle_t
+ *   state will indicate the reason for failure (typically
+ *   ZOO_EXPIRED_SESSION_STATE).
+ * \param context the handback object that will be associated with this instance
+ *   of zhandle_t. Application can access it (for example, in the watcher
+ *   callback) using \ref zoo_get_context. The object is not used by zookeeper
+ *   internally and can be null.
+ * \param flags reserved for future use. Should be set to zero.
+ * \param log_callback All log messages will be passed to this callback function.
+ *   For more details see \ref zoo_get_log_callback and \ref zoo_set_log_callback.
+ * \param sasl_params a pointer to a \ref zoo_sasl_params_t structure
+ *   specifying SASL connection parameters, or NULL to skip SASL
+ *   authentication
+ * \return a pointer to the opaque zhandle structure. If it fails to create
+ * a new zhandle the function returns NULL and the errno variable
+ * indicates the reason.
+ */
+ZOOAPI zhandle_t *zookeeper_init_sasl(const char *host, watcher_fn fn,
+  int recv_timeout, const clientid_t *clientid, void *context, int flags,
+  log_callback_fn log_callback, zoo_sasl_params_t *sasl_params);
+
+/**
+ * \brief allocates and initializes a basic array of Cyrus SASL callbacks.
+ *
+ * This small helper function makes it easy to pass "static"
+ * parameters to Cyrus SASL's underlying callback-based API.  Its use
+ * is not mandatory; you can still implement interactive dialogs by
+ * defining your own callbacks.
+ *
+ * \param user the "canned" response to \c SASL_CB_USER and \c SASL_CB_AUTHNAME,
+ *   or NULL for none
+ * \param realm the "canned" response to \c SASL_CB_GETREALM, or NULL for none
+ * \param password_file the name of a file whose first line is read in
+ *   response to \c SASL_CB_PASS, or NULL for none
+ * \return the freshly-malloc()ed callbacks array, or NULL if allocation
+ *   failed.  Deallocate with free(), but only after the corresponding
+ *   ZooKeeper handle is closed.
+ */
+ZOOAPI sasl_callback_t *zoo_sasl_make_basic_callbacks(const char *user,
+  const char *realm, const char* password_file);
+
+/**
+ * \brief signature of the callback function for SASL password.
+ *
+ * This callback is defined by user to decrypt the content of password file with
+ * context into the actual password.
+ *
+ * \param content the string read from the password file.
+ * \param content_len the size of the content in bytes.
+ * \param context the handback object that will be associated with the password
+ *   file. The object is not used by zookeeper internally and can be null.
+ * \param buf the buffer where the resulting actual password is saved.
+ * \param buf_len the size of buf in bytes, which is also the max allowed
+ *   password length.
+ * \param passwd_len as an output parameter of the callback function, passwd_len
+ *   points to the actual length of the password stored in buf. Its size must not
+ *   exceed buf_len; otherwise, SASL_BUFOVER will be returned.
+ * \return SASL_OK, or the possible errors defined by the SASL library.
+ */
+typedef int (*zoo_sasl_password_callback_t)(const char *content, size_t content_len,
+        void *context, char *buf, size_t buf_len, size_t *passwd_len);
+
+/**
+ * \brief zoo_sasl_password structure.
+ *
+ * This structure holds the parameters for getting the actual SASL password. The
+ * user-defined callback is a processor that decrypts the content of password_file
+ * with context as a handback object helping the decryption into the actual password
+ * as is described above for zoo_sasl_password_callback_t.
+ *
+ * All of password_file, context and callback are allowed to be null; however, once
+ * callback is defined, password_file should not be null since the content processed
+ * by callback is from password_file. If callback is null and password_file is given,
+ * the first line of the file is just the actual password. While both password_file
+ * and callback are null, the password would be read from terminal with prompt.
+ *
+ * zoo_sasl_password is defined by user and used to generate the actual password in
+ * response to \c SASL_CB_PASS.
+ */
+typedef struct zoo_sasl_password {
+  const char *password_file;                /*!< The path of the password file */
+  void *context;                            /*!< The handback object used by callback */
+  zoo_sasl_password_callback_t callback;    /*!< Callback over the content of password file */
+} zoo_sasl_password_t;
+
+/**
+ * \brief allocates and initializes a basic array of Cyrus SASL callbacks.
+ *
+ * This helper function is similar to zoo_sasl_make_basic_callbacks, except that
+ * the actual password is generated by zoo_sasl_password object rather than just
+ * read from the password file.
+ *
+ * \param user the "canned" response to \c SASL_CB_USER and \c SASL_CB_AUTHNAME,
+ *   or NULL for none.
+ * \param realm the "canned" response to \c SASL_CB_GETREALM, or NULL for none.
+ * \param password the object defined by user to specify how the actual password
+ *   is generated in response to \c SASL_CB_PASS, should never be NULL (otherwise
+ *   the behaviour is undefined), see struct zoo_sasl_password for details.
+ * \return the freshly-malloc()ed callbacks array, or NULL if allocation
+ *   failed. Deallocate with free(), but only after the corresponding
+ *   ZooKeeper handle is closed.
+ */
+ZOOAPI sasl_callback_t *zoo_sasl_make_password_callbacks(const char *user,
+  const char *realm, zoo_sasl_password_t *password);
+
+#endif /* HAVE_CYRUS_SASL_H */
+
+
+/**
+ * \brief return ZOO_VERSION from loaded library as a string.
+ *
+ * This method allows a calling program to determine at runtime whether the
+ * version of the dynamically loaded zookeeper library (a.k.a. zoo_version_str())
+ * is same as the version of the library the calling program was compiled against
+ * (a.k.a. ZOO_VERSION).
+ *
+ * \return a string in shape "MAJOR.MINOR.PATCH", say "3.10.0"
+ */
+ZOOAPI const char* zoo_version_str();
+
 /**
  * \brief update the list of servers this client will connect to.
  *
@@ -553,9 +806,35 @@ ZOOAPI zhandle_t *zookeeper_init2(const char *host, watcher_fn fn,
  * \return ZOK on success or one of the following errcodes on failure:
  * ZBADARGUMENTS - invalid input parameters
  * ZINVALIDSTATE - zhandle state is either ZOO_SESSION_EXPIRED_STATE or ZOO_AUTH_FAILED_STATE
- * ZSYSTEMERROR -- a system (OS) error occured; it's worth checking errno to get details
+ * ZSYSTEMERROR -- a system (OS) error occurred; it's worth checking errno to get details
  */
 ZOOAPI int zoo_set_servers(zhandle_t *zh, const char *hosts);
+
+/**
+ * \brief sets a minimum delay to observe between "routine" host name
+ * resolutions.
+ *
+ * The client performs regular resolutions of the list of servers
+ * passed to \ref zookeeper_init or set with \ref zoo_set_servers in
+ * order to detect changes at the DNS level.
+ *
+ * By default, it does so every time it checks for socket readiness.
+ * This results in low latency in the detection of changes, but can
+ * lead to heavy DNS traffic when the local cache is not effective.
+ *
+ * This method allows an application to influence the rate of polling.
+ * When delay_ms is set to a value greater than zero, the client skips
+ * most "routine" resolutions which would have happened in a window of
+ * that many milliseconds since the last successful one.
+ *
+ * Setting delay_ms to 0 disables this logic, reverting to the default
+ * behavior.  Setting it to -1 disables network resolutions during
+ * normal operation (but not, e.g., on connection loss).
+ *
+ * \param delay_ms 0, -1, or the window size in milliseconds
+ * \return ZOK on success or ZBADARGUMENTS for invalid input parameters
+ */
+ZOOAPI int zoo_set_servers_resolution_delay(zhandle_t *zh, int delay_ms);
 
 /**
  * \brief cycle to the next server on the next connection attempt.
@@ -896,11 +1175,12 @@ ZOOAPI int zoo_state(zhandle_t *zh);
  * \brief create a node.
  *
  * This method will create a node in ZooKeeper. A node can only be created if
- * it does not already exists. The Create Flags affect the creation of nodes.
- * If ZOO_EPHEMERAL flag is set, the node will automatically get removed if the
- * client session goes away. If the ZOO_SEQUENCE flag is set, a unique
- * monotonically increasing sequence number is appended to the path name. The
- * sequence number is always fixed length of 10 digits, 0 padded.
+ * it does not already exist. The Create Mode affects the creation of nodes.
+ * If ZOO_EPHEMERAL mode is chosen, the node will automatically get removed if the
+ * client session goes away. If ZOO_CONTAINER flag is set, a container node will be
+ * created. For ZOO_*_SEQUENTIAL modes, a unique monotonically increasing
+ * sequence number is appended to the path name. The sequence number is always fixed
+ * length of 10 digits, 0 padded.
  *
  * \param zh the zookeeper handle obtained by a call to \ref zookeeper_init
  * \param path The name of the node. Expressed as a file name with slashes
@@ -908,8 +1188,7 @@ ZOOAPI int zoo_state(zhandle_t *zh);
  * \param value The data to be stored in the node.
  * \param valuelen The number of bytes in data.
  * \param acl The initial ACL of the node. The ACL must not be null or empty.
- * \param flags this parameter can be set to 0 for normal create or an OR
- *    of the Create Flags
+ * \param mode this parameter should be one of the Create Modes.
  * \param completion the routine to invoke when the request completes. The completion
  * will be triggered with one of the following codes passed in as the rc argument:
  * ZOK operation completed successfully
@@ -925,18 +1204,20 @@ ZOOAPI int zoo_state(zhandle_t *zh);
  * ZMARSHALLINGERROR - failed to marshall a request; possibly, out of memory
  */
 ZOOAPI int zoo_acreate(zhandle_t *zh, const char *path, const char *value, 
-        int valuelen, const struct ACL_vector *acl, int flags,
+        int valuelen, const struct ACL_vector *acl, int mode,
         string_completion_t completion, const void *data);
 
 /**
- * \brief create a node asynchronously and returns stat details.
+ * \brief create a node.
  *
  * This method will create a node in ZooKeeper. A node can only be created if
- * it does not already exists. The Create Flags affect the creation of nodes.
- * If ZOO_EPHEMERAL flag is set, the node will automatically get removed if the
- * client session goes away. If the ZOO_SEQUENCE flag is set, a unique
- * monotonically increasing sequence number is appended to the path name. The
- * sequence number is always fixed length of 10 digits, 0 padded.
+ * it does not already exist. The Create Mode affects the creation of nodes.
+ * If ZOO_EPHEMERAL mode is chosen, the node will automatically get removed if the
+ * client session goes away. If ZOO_CONTAINER flag is set, a container node will be
+ * created. For ZOO_*_SEQUENTIAL modes, a unique monotonically increasing
+ * sequence number is appended to the path name. The sequence number is always fixed
+ * length of 10 digits, 0 padded. When ZOO_*_WITH_TTL is selected, a ttl node will be
+ * created.
  *
  * \param zh the zookeeper handle obtained by a call to \ref zookeeper_init
  * \param path The name of the node. Expressed as a file name with slashes
@@ -944,8 +1225,45 @@ ZOOAPI int zoo_acreate(zhandle_t *zh, const char *path, const char *value,
  * \param value The data to be stored in the node.
  * \param valuelen The number of bytes in data.
  * \param acl The initial ACL of the node. The ACL must not be null or empty.
- * \param flags this parameter can be set to 0 for normal create or an OR
- *    of the Create Flags
+ * \param mode this parameter should be one of the Create Modes.
+ * \param ttl the value of ttl in milliseconds. It must be positive for ZOO_*_WITH_TTL
+ *    Create modes, otherwise it must be -1.
+ * \param completion the routine to invoke when the request completes. The completion
+ * will be triggered with one of the following codes passed in as the rc argument:
+ * ZOK operation completed successfully
+ * ZNONODE the parent node does not exist.
+ * ZNODEEXISTS the node already exists
+ * ZNOAUTH the client does not have permission.
+ * ZNOCHILDRENFOREPHEMERALS cannot create children of ephemeral nodes.
+ * \param data The data that will be passed to the completion routine when the
+ * function completes.
+ * \return ZOK on success or one of the following errcodes on failure:
+ * ZBADARGUMENTS - invalid input parameters
+ * ZINVALIDSTATE - zhandle state is either ZOO_SESSION_EXPIRED_STATE or ZOO_AUTH_FAILED_STATE
+ * ZMARSHALLINGERROR - failed to marshall a request; possibly, out of memory
+ */
+ZOOAPI int zoo_acreate_ttl(zhandle_t *zh, const char *path, const char *value,
+        int valuelen, const struct ACL_vector *acl, int mode, int64_t ttl,
+        string_completion_t completion, const void *data);
+
+/**
+ * \brief create a node asynchronously and returns stat details.
+ *
+ * This method will create a node in ZooKeeper. A node can only be created if
+ * it does not already exist. The Create Mode affects the creation of nodes.
+ * If ZOO_EPHEMERAL mode is chosen, the node will automatically get removed if the
+ * client session goes away. If ZOO_CONTAINER flag is set, a container node will be
+ * created. For ZOO_*_SEQUENTIAL modes, a unique monotonically increasing
+ * sequence number is appended to the path name. The sequence number is always fixed
+ * length of 10 digits, 0 padded.
+ *
+ * \param zh the zookeeper handle obtained by a call to \ref zookeeper_init
+ * \param path The name of the node. Expressed as a file name with slashes
+ * separating ancestors of the node.
+ * \param value The data to be stored in the node.
+ * \param valuelen The number of bytes in data.
+ * \param acl The initial ACL of the node. The ACL must not be null or empty.
+ * \param mode this parameter should be one of the Create Modes.
  * \param completion the routine to invoke when the request completes. The completion
  * will be triggered with one of the following codes passed in as the rc argument:
  * ZOK operation completed successfully
@@ -961,7 +1279,46 @@ ZOOAPI int zoo_acreate(zhandle_t *zh, const char *path, const char *value,
  * ZMARSHALLINGERROR - failed to marshall a request; possibly, out of memory
  */
 ZOOAPI int zoo_acreate2(zhandle_t *zh, const char *path, const char *value,
-        int valuelen, const struct ACL_vector *acl, int flags,
+        int valuelen, const struct ACL_vector *acl, int mode,
+        string_stat_completion_t completion, const void *data);
+
+/**
+ * \brief create a node asynchronously and returns stat details.
+ *
+ * This method will create a node in ZooKeeper. A node can only be created if
+ * it does not already exist. The Create Mode affects the creation of nodes.
+ * If ZOO_EPHEMERAL mode is chosen, the node will automatically get removed if the
+ * client session goes away. If ZOO_CONTAINER flag is set, a container node will be
+ * created. For ZOO_*_SEQUENTIAL modes, a unique monotonically increasing
+ * sequence number is appended to the path name. The sequence number is always fixed
+ * length of 10 digits, 0 padded. When ZOO_*_WITH_TTL is selected, a ttl node will be
+ * created.
+ *
+ * \param zh the zookeeper handle obtained by a call to \ref zookeeper_init
+ * \param path The name of the node. Expressed as a file name with slashes
+ * separating ancestors of the node.
+ * \param value The data to be stored in the node.
+ * \param valuelen The number of bytes in data.
+ * \param acl The initial ACL of the node. The ACL must not be null or empty.
+ * \param mode this parameter should be one of the Create Modes.
+ * \param ttl the value of ttl in milliseconds. It must be positive for ZOO_*_WITH_TTL
+ *    Create modes, otherwise it must be -1.
+ * \param completion the routine to invoke when the request completes. The completion
+ * will be triggered with one of the following codes passed in as the rc argument:
+ * ZOK operation completed successfully
+ * ZNONODE the parent node does not exist.
+ * ZNODEEXISTS the node already exists
+ * ZNOAUTH the client does not have permission.
+ * ZNOCHILDRENFOREPHEMERALS cannot create children of ephemeral nodes.
+ * \param data The data that will be passed to the completion routine when the
+ * function completes.
+ * \return ZOK on success or one of the following errcodes on failure:
+ * ZBADARGUMENTS - invalid input parameters
+ * ZINVALIDSTATE - zhandle state is either ZOO_SESSION_EXPIRED_STATE or ZOO_AUTH_FAILED_STATE
+ * ZMARSHALLINGERROR - failed to marshall a request; possibly, out of memory
+ */
+ZOOAPI int zoo_acreate2_ttl(zhandle_t *zh, const char *path, const char *value,
+        int valuelen, const struct ACL_vector *acl, int mode, int64_t ttl,
         string_stat_completion_t completion, const void *data);
 
 /**
@@ -1531,7 +1888,7 @@ typedef enum {
  * \param wtype the watcher type to be removed
  * \param watcher the watcher to be removed, if null all watches for that
  * path (and watcher type) will be removed
- * \param watcherCtx the contex associated with the watcher to be removed
+ * \param watcherCtx the context associated with the watcher to be removed
  * \param local whether the watches will be removed locally even if there is
  * no server connection
  * \return the return code for the function call.
@@ -1541,7 +1898,7 @@ typedef enum {
  * or ZOO_AUTH_FAILED_STATE
  * ZBADARGUMENTS - invalid input parameters
  * ZMARSHALLINGERROR - failed to marshall a request; possibly, out of memory
- * ZSYSTEMERROR - a system error occured
+ * ZSYSTEMERROR - a system error occurred
  */
 ZOOAPI int zoo_aremove_watches(zhandle_t *zh, const char *path,
         ZooWatcherType wtype, watcher_fn watcher, void *watcherCtx, int local,
@@ -1562,7 +1919,7 @@ ZOOAPI int zoo_aremove_watches(zhandle_t *zh, const char *path,
  * or ZOO_AUTH_FAILED_STATE
  * ZBADARGUMENTS - invalid input parameters
  * ZMARSHALLINGERROR - failed to marshall a request; possibly, out of memory
- * ZSYSTEMERROR - a system error occured
+ * ZSYSTEMERROR - a system error occurred
  */
 ZOOAPI int zoo_remove_all_watches(zhandle_t *zh, const char *path,
         ZooWatcherType wtype, int local);
@@ -1582,7 +1939,7 @@ ZOOAPI int zoo_remove_all_watches(zhandle_t *zh, const char *path,
  * or ZOO_AUTH_FAILED_STATE
  * ZBADARGUMENTS - invalid input parameters
  * ZMARSHALLINGERROR - failed to marshall a request; possibly, out of memory
- * ZSYSTEMERROR - a system error occured
+ * ZSYSTEMERROR - a system error occurred
 */
 ZOOAPI int zoo_aremove_all_watches(zhandle_t *zh, const char *path,
         ZooWatcherType wtype, int local, void_completion_t *completion,
@@ -1593,10 +1950,12 @@ ZOOAPI int zoo_aremove_all_watches(zhandle_t *zh, const char *path,
  * \brief create a node synchronously.
  *
  * This method will create a node in ZooKeeper. A node can only be created if
- * it does not already exists. The Create Flags affect the creation of nodes.
- * If ZOO_EPHEMERAL flag is set, the node will automatically get removed if the
- * client session goes away. If the ZOO_SEQUENCE flag is set, a unique
- * monotonically increasing sequence number is appended to the path name.
+ * it does not already exist. The Create Mode affects the creation of nodes.
+ * If ZOO_EPHEMERAL mode is chosen, the node will automatically get removed if the
+ * client session goes away. If ZOO_CONTAINER flag is set, a container node will be
+ * created. For ZOO_*_SEQUENTIAL modes, a unique monotonically increasing
+ * sequence number is appended to the path name. The sequence number is always fixed
+ * length of 10 digits, 0 padded.
  *
  * \param zh the zookeeper handle obtained by a call to \ref zookeeper_init
  * \param path The name of the node. Expressed as a file name with slashes
@@ -1605,8 +1964,7 @@ ZOOAPI int zoo_aremove_all_watches(zhandle_t *zh, const char *path,
  * \param valuelen The number of bytes in data. To set the data to be NULL use
  * value as NULL and valuelen as -1.
  * \param acl The initial ACL of the node. The ACL must not be null or empty.
- * \param flags this parameter can be set to 0 for normal create or an OR
- *    of the Create Flags
+ * \param mode this parameter should be one of the Create Modes.
  * \param path_buffer Buffer which will be filled with the path of the
  *    new node (this might be different than the supplied path
  *    because of the ZOO_SEQUENCE flag).  The path string will always be
@@ -1627,17 +1985,20 @@ ZOOAPI int zoo_aremove_all_watches(zhandle_t *zh, const char *path,
  * ZMARSHALLINGERROR - failed to marshall a request; possibly, out of memory
  */
 ZOOAPI int zoo_create(zhandle_t *zh, const char *path, const char *value,
-        int valuelen, const struct ACL_vector *acl, int flags,
+        int valuelen, const struct ACL_vector *acl, int mode,
         char *path_buffer, int path_buffer_len);
 
 /**
- * \brief create a node synchronously and collect stat details.
+ * \brief create a node synchronously.
  *
  * This method will create a node in ZooKeeper. A node can only be created if
- * it does not already exists. The Create Flags affect the creation of nodes.
- * If ZOO_EPHEMERAL flag is set, the node will automatically get removed if the
- * client session goes away. If the ZOO_SEQUENCE flag is set, a unique
- * monotonically increasing sequence number is appended to the path name.
+ * it does not already exist. The Create Mode affects the creation of nodes.
+ * If ZOO_EPHEMERAL mode is chosen, the node will automatically get removed if the
+ * client session goes away. If ZOO_CONTAINER flag is set, a container node will be
+ * created. For ZOO_*_SEQUENTIAL modes, a unique monotonically increasing
+ * sequence number is appended to the path name. The sequence number is always fixed
+ * length of 10 digits, 0 padded. When ZOO_*_WITH_TTL is selected, a ttl node will be
+ * created.
  *
  * \param zh the zookeeper handle obtained by a call to \ref zookeeper_init
  * \param path The name of the node. Expressed as a file name with slashes
@@ -1646,8 +2007,51 @@ ZOOAPI int zoo_create(zhandle_t *zh, const char *path, const char *value,
  * \param valuelen The number of bytes in data. To set the data to be NULL use
  * value as NULL and valuelen as -1.
  * \param acl The initial ACL of the node. The ACL must not be null or empty.
- * \param flags this parameter can be set to 0 for normal create or an OR
- *    of the Create Flags
+ * \param mode this parameter should be one of the Create Modes.
+ * \param ttl the value of ttl in milliseconds. It must be positive for ZOO_*_WITH_TTL
+ *    Create modes, otherwise it must be -1.
+ * \param path_buffer Buffer which will be filled with the path of the
+ *    new node (this might be different than the supplied path
+ *    because of the ZOO_SEQUENCE flag).  The path string will always be
+ *    null-terminated. This parameter may be NULL if path_buffer_len = 0.
+ * \param path_buffer_len Size of path buffer; if the path of the new
+ *    node (including space for the null terminator) exceeds the buffer size,
+ *    the path string will be truncated to fit.  The actual path of the
+ *    new node in the server will not be affected by the truncation.
+ *    The path string will always be null-terminated.
+ * \return  one of the following codes are returned:
+ * ZOK operation completed successfully
+ * ZNONODE the parent node does not exist.
+ * ZNODEEXISTS the node already exists
+ * ZNOAUTH the client does not have permission.
+ * ZNOCHILDRENFOREPHEMERALS cannot create children of ephemeral nodes.
+ * ZBADARGUMENTS - invalid input parameters
+ * ZINVALIDSTATE - zhandle state is either ZOO_SESSION_EXPIRED_STATE or ZOO_AUTH_FAILED_STATE
+ * ZMARSHALLINGERROR - failed to marshall a request; possibly, out of memory
+ */
+ZOOAPI int zoo_create_ttl(zhandle_t *zh, const char *path, const char *value,
+        int valuelen, const struct ACL_vector *acl, int mode, int64_t ttl,
+        char *path_buffer, int path_buffer_len);
+
+/**
+ * \brief create a node synchronously and collect stat details.
+ *
+ * This method will create a node in ZooKeeper. A node can only be created if
+ * it does not already exist. The Create Mode affects the creation of nodes.
+ * If ZOO_EPHEMERAL mode is chosen, the node will automatically get removed if the
+ * client session goes away. If ZOO_CONTAINER flag is set, a container node will be
+ * created. For ZOO_*_SEQUENTIAL modes, a unique monotonically increasing
+ * sequence number is appended to the path name. The sequence number is always fixed
+ * length of 10 digits, 0 padded.
+ *
+ * \param zh the zookeeper handle obtained by a call to \ref zookeeper_init
+ * \param path The name of the node. Expressed as a file name with slashes
+ * separating ancestors of the node.
+ * \param value The data to be stored in the node.
+ * \param valuelen The number of bytes in data. To set the data to be NULL use
+ * value as NULL and valuelen as -1.
+ * \param acl The initial ACL of the node. The ACL must not be null or empty.
+ * \param mode this parameter should be one of the Create Modes.
  * \param path_buffer Buffer which will be filled with the path of the
  *    new node (this might be different than the supplied path
  *    because of the ZOO_SEQUENCE flag).  The path string will always be
@@ -1669,7 +2073,53 @@ ZOOAPI int zoo_create(zhandle_t *zh, const char *path, const char *value,
  * ZMARSHALLINGERROR - failed to marshall a request; possibly, out of memory
  */
 ZOOAPI int zoo_create2(zhandle_t *zh, const char *path, const char *value,
-        int valuelen, const struct ACL_vector *acl, int flags,
+        int valuelen, const struct ACL_vector *acl, int mode,
+        char *path_buffer, int path_buffer_len, struct Stat *stat);
+
+/**
+ * \brief create a node synchronously and collect stat details.
+ *
+ * This method will create a node in ZooKeeper. A node can only be created if
+ * it does not already exist. The Create Mode affects the creation of nodes.
+ * If ZOO_EPHEMERAL mode is chosen, the node will automatically get removed if the
+ * client session goes away. If ZOO_CONTAINER flag is set, a container node will be
+ * created. For ZOO_*_SEQUENTIAL modes, a unique monotonically increasing
+ * sequence number is appended to the path name. The sequence number is always fixed
+ * length of 10 digits, 0 padded. When ZOO_*_WITH_TTL is selected, a ttl node will be
+ * created.
+ *
+ * \param zh the zookeeper handle obtained by a call to \ref zookeeper_init
+ * \param path The name of the node. Expressed as a file name with slashes
+ * separating ancestors of the node.
+ * \param value The data to be stored in the node.
+ * \param valuelen The number of bytes in data. To set the data to be NULL use
+ * value as NULL and valuelen as -1.
+ * \param acl The initial ACL of the node. The ACL must not be null or empty.
+ * \param mode this parameter should be one of the Create Modes.
+ * \param ttl the value of ttl in milliseconds. It must be positive for ZOO_*_WITH_TTL
+ *    Create modes, otherwise it must be -1.
+ * \param path_buffer Buffer which will be filled with the path of the
+ *    new node (this might be different than the supplied path
+ *    because of the ZOO_SEQUENCE flag).  The path string will always be
+ *    null-terminated. This parameter may be NULL if path_buffer_len = 0.
+ * \param path_buffer_len Size of path buffer; if the path of the new
+ *    node (including space for the null terminator) exceeds the buffer size,
+ *    the path string will be truncated to fit.  The actual path of the
+ *    new node in the server will not be affected by the truncation.
+ *    The path string will always be null-terminated.
+ * \param stat The Stat struct to store Stat info into.
+ * \return  one of the following codes are returned:
+ * ZOK operation completed successfully
+ * ZNONODE the parent node does not exist.
+ * ZNODEEXISTS the node already exists
+ * ZNOAUTH the client does not have permission.
+ * ZNOCHILDRENFOREPHEMERALS cannot create children of ephemeral nodes.
+ * ZBADARGUMENTS - invalid input parameters
+ * ZINVALIDSTATE - zhandle state is either ZOO_SESSION_EXPIRED_STATE or ZOO_AUTH_FAILED_STATE
+ * ZMARSHALLINGERROR - failed to marshall a request; possibly, out of memory
+ */
+ZOOAPI int zoo_create2_ttl(zhandle_t *zh, const char *path, const char *value,
+        int valuelen, const struct ACL_vector *acl, int mode, int64_t ttl,
         char *path_buffer, int path_buffer_len, struct Stat *stat);
 
 /**
@@ -1692,7 +2142,6 @@ ZOOAPI int zoo_create2(zhandle_t *zh, const char *path, const char *value,
  * ZMARSHALLINGERROR - failed to marshall a request; possibly, out of memory
  */
 ZOOAPI int zoo_delete(zhandle_t *zh, const char *path, int version);
-
 
 /**
  * \brief checks the existence of a node in zookeeper synchronously.
@@ -2094,7 +2543,7 @@ ZOOAPI int zoo_multi(zhandle_t *zh, int count, const zoo_op_t *ops, zoo_op_resul
  * \param wtype the watcher type to be removed
  * \param watcher the watcher to be removed, if null all watches for that
  * path (and watcher type) will be removed
- * \param watcherCtx the contex associated with the watcher to be removed
+ * \param watcherCtx the context associated with the watcher to be removed
  * \param local whether the watches will be removed locally even if there is
  * no server connection
  * \return the return code for the function call.
@@ -2104,7 +2553,7 @@ ZOOAPI int zoo_multi(zhandle_t *zh, int count, const zoo_op_t *ops, zoo_op_resul
  * or ZOO_AUTH_FAILED_STATE
  * ZBADARGUMENTS - invalid input parameters
  * ZMARSHALLINGERROR - failed to marshall a request; possibly, out of memory
- * ZSYSTEMERROR - a system error occured
+ * ZSYSTEMERROR - a system error occurred
  */
 ZOOAPI int zoo_remove_watches(zhandle_t *zh, const char *path,
         ZooWatcherType wtype, watcher_fn watcher, void *watcherCtx, int local);

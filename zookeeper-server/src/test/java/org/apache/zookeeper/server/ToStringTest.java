@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,21 +18,41 @@
 
 package org.apache.zookeeper.server;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
+import java.lang.reflect.Field;
 import org.apache.zookeeper.ZKTestCase;
+import org.apache.zookeeper.ZooDefs;
 import org.apache.zookeeper.proto.SetDataRequest;
-import org.junit.Assert;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 /**
  * A misc place to verify toString methods - mainly to make sure they don't
  * fail.
  */
 public class ToStringTest extends ZKTestCase {
-    /** Verify jute - which we've had particular problems with in the past 
+
+    /** Verify jute - which we've had particular problems with in the past
      * wrt null fields */
     @Test
     public void testJuteToString() {
         SetDataRequest req = new SetDataRequest(null, null, 0);
-        Assert.assertNotSame("ERROR", req.toString());
+        assertNotSame("ERROR", req.toString());
     }
+
+    @Test
+    public void testOpCodeToString() throws Exception {
+        Class<?> clazz = ZooDefs.OpCode.class;
+        Field[] fields = clazz.getFields();
+
+        assertNotEquals(0, fields.length);
+
+        for (Field field : fields) {
+            int opCode = field.getInt(null);
+            String opString = Request.op2String(opCode);
+            assertEquals(field.getName(), opString);
+        }
+    }
+
 }

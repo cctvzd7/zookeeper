@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,18 +18,70 @@
 
 package org.apache.zookeeper.server;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
 import java.io.File;
 import java.io.IOException;
 import java.util.List;
-
+import java.util.Map;
+import java.util.UUID;
+import org.apache.zookeeper.PortAssignment;
 import org.apache.zookeeper.ZKTestCase;
+import org.apache.zookeeper.metrics.MetricsUtils;
+import org.apache.zookeeper.proto.ConnectRequest;
 import org.apache.zookeeper.server.persistence.FileTxnLog;
+import org.apache.zookeeper.server.persistence.FileTxnSnapLog;
+import org.apache.zookeeper.server.persistence.SnapStream;
 import org.apache.zookeeper.server.persistence.Util;
+import org.apache.zookeeper.server.util.QuotaMetricsUtils;
 import org.apache.zookeeper.test.ClientBase;
-import org.junit.Assert;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 public class ZooKeeperServerTest extends ZKTestCase {
+
+    @Test
+    public void testDirSize() throws Exception {
+        ZooKeeperServer zks = null;
+        ServerCnxnFactory cnxnFactory = null;
+
+        try {
+            final File dataDir = ClientBase.createTmpDir();
+            final File logDir = ClientBase.createTmpDir();
+
+            zks = new ZooKeeperServer(dataDir, logDir, 3000);
+
+            // validate dir size before server starts
+            assertEquals(0, zks.getDataDirSize());
+            assertEquals(0, zks.getLogDirSize());
+
+            // start server
+            final String hostPort = "127.0.0.1:" + PortAssignment.unique();
+            final int port = Integer.parseInt(hostPort.split(":")[1]);
+            cnxnFactory = ServerCnxnFactory.createFactory(port, -1);
+            cnxnFactory.startup(zks);
+            assertTrue(ClientBase.waitForServerUp(hostPort, 120000));
+
+            // validate data size is greater than 0 as snapshot has been taken when server starts
+            assertTrue(zks.getDataDirSize() > 0);
+
+            // validate log size is 0 as no txn yet
+            assertEquals(0, zks.getLogDirSize());
+        } finally {
+            if (cnxnFactory != null) {
+                cnxnFactory.shutdown();
+            }
+
+            if (zks != null) {
+                zks.shutdown();
+            }
+        }
+    }
+
+
     @Test
     public void testSortDataDirAscending() {
         File[] files = new File[5];
@@ -44,11 +96,11 @@ public class ZooKeeperServerTest extends ZKTestCase {
 
         List<File> filelist = Util.sortDataDir(files, "foo", true);
 
-        Assert.assertEquals(orig[2], filelist.get(0));
-        Assert.assertEquals(orig[3], filelist.get(1));
-        Assert.assertEquals(orig[0], filelist.get(2));
-        Assert.assertEquals(orig[1], filelist.get(3));
-        Assert.assertEquals(orig[4], filelist.get(4));
+        assertEquals(orig[2], filelist.get(0));
+        assertEquals(orig[3], filelist.get(1));
+        assertEquals(orig[0], filelist.get(2));
+        assertEquals(orig[1], filelist.get(3));
+        assertEquals(orig[4], filelist.get(4));
     }
 
     @Test
@@ -65,11 +117,11 @@ public class ZooKeeperServerTest extends ZKTestCase {
 
         List<File> filelist = Util.sortDataDir(files, "foo", false);
 
-        Assert.assertEquals(orig[4], filelist.get(0));
-        Assert.assertEquals(orig[1], filelist.get(1));
-        Assert.assertEquals(orig[0], filelist.get(2));
-        Assert.assertEquals(orig[3], filelist.get(3));
-        Assert.assertEquals(orig[2], filelist.get(4));
+        assertEquals(orig[4], filelist.get(0));
+        assertEquals(orig[1], filelist.get(1));
+        assertEquals(orig[0], filelist.get(2));
+        assertEquals(orig[3], filelist.get(3));
+        assertEquals(orig[2], filelist.get(4));
     }
 
     @Test
@@ -84,34 +136,31 @@ public class ZooKeeperServerTest extends ZKTestCase {
 
         File[] orig = files.clone();
 
-        File[] filelist =
-                FileTxnLog.getLogFiles(files,
-                Long.parseLong("10027c6de", 16));
+        File[] filelist = FileTxnLog.getLogFiles(files, Long.parseLong("10027c6de", 16));
 
-        Assert.assertEquals(3, filelist.length);
-        Assert.assertEquals(orig[0], filelist[0]);
-        Assert.assertEquals(orig[1], filelist[1]);
-        Assert.assertEquals(orig[4], filelist[2]);
+        assertEquals(3, filelist.length);
+        assertEquals(orig[0], filelist[0]);
+        assertEquals(orig[1], filelist[1]);
+        assertEquals(orig[4], filelist[2]);
     }
 
     @Test
     public void testForceSyncDefaultEnabled() {
         File file = new File("foo.10027c6de");
         FileTxnLog log = new FileTxnLog(file);
-        Assert.assertTrue(log.isForceSync());
+        assertTrue(log.isForceSync());
     }
 
     @Test
     public void testForceSyncDefaultDisabled() {
         try {
             File file = new File("foo.10027c6de");
-            System.setProperty("zookeeper.forceSync","no");
+            System.setProperty("zookeeper.forceSync", "no");
             FileTxnLog log = new FileTxnLog(file);
-            Assert.assertFalse(log.isForceSync());
-        }
-        finally {
+            assertFalse(log.isForceSync());
+        } finally {
             //Reset back to default.
-            System.setProperty("zookeeper.forceSync","yes");
+            System.setProperty("zookeeper.forceSync", "yes");
         }
     }
 
@@ -125,13 +174,55 @@ public class ZooKeeperServerTest extends ZKTestCase {
             if (!f.exists()) {
                 f.createNewFile();
             }
-            Assert.assertFalse("Snapshot file size is greater than 9 bytes", Util.isValidSnapshot(f));
-            Assert.assertTrue("Can't delete file", f.delete());
+            assertFalse(SnapStream.isValidSnapshot(f), "Snapshot file size is greater than 9 bytes");
+            assertTrue(f.delete(), "Can't delete file");
         } catch (IOException e) {
         } finally {
             if (null != tmpFileDir) {
                 ClientBase.recursiveDelete(tmpFileDir);
             }
         }
+    }
+
+    @Test
+    public void testClientZxidAhead() {
+        ZooKeeperServer zooKeeperServer = new ZooKeeperServer();
+        final ZKDatabase zkDatabase = new ZKDatabase(mock(FileTxnSnapLog.class));
+        zooKeeperServer.setZKDatabase(zkDatabase);
+
+        final ConnectRequest request = new ConnectRequest();
+        request.setProtocolVersion(1);
+        request.setLastZxidSeen(99L);
+        request.setTimeOut(500);
+        request.setSessionId(123L);
+        request.setPasswd(new byte[]{ 1 });
+        request.setReadOnly(true);
+
+        ServerCnxn.CloseRequestException e = assertThrows(
+                ServerCnxn.CloseRequestException.class,
+                () -> zooKeeperServer.processConnectRequest(new MockServerCnxn(), request));
+        assertEquals(e.getReason(), ServerCnxn.DisconnectReason.CLIENT_ZXID_AHEAD);
+    }
+
+    @Test
+    public void testUpdateQuotaExceededMetrics() {
+        final String name = QuotaMetricsUtils.QUOTA_EXCEEDED_ERROR_PER_NAMESPACE;
+        final String namespace = UUID.randomUUID().toString();
+        final long count = 3L;
+
+        for (int i = 0; i < count; i++) {
+            ZooKeeperServer.updateQuotaExceededMetrics(namespace);
+        }
+
+        final Map<String, Object> values = MetricsUtils.currentServerMetrics();
+        assertEquals(1, values.keySet().stream().filter(
+                key -> key.contains(String.format("%s_%s", namespace, name))).count());
+
+        assertEquals(count, values.get(String.format("%s_%s", namespace, name)));
+    }
+
+    @Test
+    public void testUpdateQuotaExceededMetrics_nullNamespace() {
+        assertDoesNotThrow(() -> ZooKeeperServer.updateQuotaExceededMetrics(null));
     }
 }

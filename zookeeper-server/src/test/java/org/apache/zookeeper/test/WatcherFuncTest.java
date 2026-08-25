@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,28 +18,35 @@
 
 package org.apache.zookeeper.test;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
-
 import org.apache.zookeeper.CreateMode;
 import org.apache.zookeeper.KeeperException;
 import org.apache.zookeeper.WatchedEvent;
 import org.apache.zookeeper.Watcher;
-import org.apache.zookeeper.ZooKeeper;
 import org.apache.zookeeper.Watcher.Event.EventType;
 import org.apache.zookeeper.Watcher.Event.KeeperState;
 import org.apache.zookeeper.ZooDefs.Ids;
-import org.junit.Assert;
-import org.junit.Test;
+import org.apache.zookeeper.ZooKeeper;
+import org.apache.zookeeper.data.Stat;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 public class WatcherFuncTest extends ClientBase {
+
     private static class SimpleWatcher implements Watcher {
-        private LinkedBlockingQueue<WatchedEvent> events =
-            new LinkedBlockingQueue<WatchedEvent>();
+
+        private LinkedBlockingQueue<WatchedEvent> events = new LinkedBlockingQueue<>();
         private CountDownLatch latch;
 
         public SimpleWatcher(CountDownLatch latch) {
@@ -59,22 +66,25 @@ public class WatcherFuncTest extends ClientBase {
             try {
                 events.put(event);
             } catch (InterruptedException e) {
-                Assert.assertTrue("interruption unexpected", false);
+                assertTrue(false, "interruption unexpected");
             }
         }
-        public void verify(List<EventType> expected) throws InterruptedException{
+
+        public void verify(List<WatchedEvent> expected) throws InterruptedException {
+            List<WatchedEvent> actual = new ArrayList<>();
             WatchedEvent event;
-            int count = 0;
-            while (count < expected.size()
-                    && (event = events.poll(30, TimeUnit.SECONDS)) != null)
-            {
-                Assert.assertEquals(expected.get(count), event.getType());
-                count++;
+            while (actual.size() < expected.size() && (event = events.poll(30, TimeUnit.SECONDS)) != null) {
+                actual.add(event);
             }
-            Assert.assertEquals(expected.size(), count);
+            assertEquals(expected.size(), actual.size());
+            for (int i = 0; i < expected.size(); i++) {
+                TestUtils.assertWatchedEventEquals(expected.get(i), actual.get(i));
+            }
             events.clear();
         }
+
     }
+
     private SimpleWatcher client_dwatch;
     private volatile CountDownLatch client_latch;
     private ZooKeeper client;
@@ -82,8 +92,9 @@ public class WatcherFuncTest extends ClientBase {
     private volatile CountDownLatch lsnr_latch;
     private ZooKeeper lsnr;
 
-    private List<EventType> expected;
+    private List<WatchedEvent> expected;
 
+    @BeforeEach
     @Override
     public void setUp() throws Exception {
         super.setUp();
@@ -96,9 +107,10 @@ public class WatcherFuncTest extends ClientBase {
         lsnr_dwatch = new SimpleWatcher(lsnr_latch);
         lsnr = createClient(lsnr_dwatch, lsnr_latch);
 
-        expected = new ArrayList<EventType>();
+        expected = new ArrayList<>();
     }
 
+    @AfterEach
     @Override
     public void tearDown() throws Exception {
         client.close();
@@ -106,12 +118,10 @@ public class WatcherFuncTest extends ClientBase {
         super.tearDown();
     }
 
-    protected ZooKeeper createClient(Watcher watcher, CountDownLatch latch)
-        throws IOException, InterruptedException
-    {
+    protected ZooKeeper createClient(Watcher watcher, CountDownLatch latch) throws IOException, InterruptedException {
         ZooKeeper zk = new ZooKeeper(hostPort, CONNECTION_TIMEOUT, watcher);
-        if(!latch.await(CONNECTION_TIMEOUT, TimeUnit.MILLISECONDS)){
-            Assert.fail("Unable to connect to server");
+        if (!latch.await(CONNECTION_TIMEOUT, TimeUnit.MILLISECONDS)) {
+            fail("Unable to connect to server");
         }
         return zk;
     }
@@ -121,169 +131,180 @@ public class WatcherFuncTest extends ClientBase {
         expected.clear();
     }
 
+    private void addEvent(List<WatchedEvent> events, EventType eventType, String path, Stat stat) {
+        addEvent(events, eventType, path, stat.getMzxid());
+    }
+
+    private void addEvent(List<WatchedEvent> events, EventType eventType, String path, long zxid) {
+        events.add(new WatchedEvent(eventType, KeeperState.SyncConnected, path, zxid));
+    }
+
+    private long delete(String path) throws InterruptedException, KeeperException {
+        client.delete(path, -1);
+        int lastSlash = path.lastIndexOf('/');
+        String parent = (lastSlash == 0)
+            ? "/"
+            : path.substring(0, lastSlash);
+        // the deletion's zxid will be reflected in the parent's Pzxid
+        return client.exists(parent, false).getPzxid();
+    }
+
     @Test
-    public void testExistsSync()
-        throws IOException, InterruptedException, KeeperException
-    {
-        Assert.assertNull(lsnr.exists("/foo", true));
-        Assert.assertNull(lsnr.exists("/foo/bar", true));
+    public void testExistsSync() throws IOException, InterruptedException, KeeperException {
+        assertNull(lsnr.exists("/foo", true));
+        assertNull(lsnr.exists("/foo/bar", true));
 
-        client.create("/foo", "parent".getBytes(), Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
-        expected.add(EventType.NodeCreated);
-        client.create("/foo/bar", "child".getBytes(), Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
-        expected.add(EventType.NodeCreated);
+        Stat stat = new Stat();
+        client.create("/foo", "parent".getBytes(), Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT, stat);
+        addEvent(expected, EventType.NodeCreated, "/foo", stat);
+        client.create("/foo/bar", "child".getBytes(), Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT, stat);
+        addEvent(expected, EventType.NodeCreated, "/foo/bar", stat);
 
         verify();
 
-        Assert.assertNotNull(lsnr.exists("/foo", true));
-        Assert.assertNotNull(lsnr.exists("/foo/bar", true));
+        assertNotNull(lsnr.exists("/foo", true));
+        assertNotNull(lsnr.exists("/foo/bar", true));
 
         try {
-            Assert.assertNull(lsnr.exists("/car", true));
+            assertNull(lsnr.exists("/car", true));
             client.setData("/car", "missing".getBytes(), -1);
-            Assert.fail();
+            fail();
         } catch (KeeperException e) {
-            Assert.assertEquals(KeeperException.Code.NONODE, e.code());
-            Assert.assertEquals("/car", e.getPath());
+            assertEquals(KeeperException.Code.NONODE, e.code());
+            assertEquals("/car", e.getPath());
         }
 
         try {
-            Assert.assertNull(lsnr.exists("/foo/car", true));
+            assertNull(lsnr.exists("/foo/car", true));
             client.setData("/foo/car", "missing".getBytes(), -1);
-            Assert.fail();
+            fail();
         } catch (KeeperException e) {
-            Assert.assertEquals(KeeperException.Code.NONODE, e.code());
-            Assert.assertEquals("/foo/car", e.getPath());
+            assertEquals(KeeperException.Code.NONODE, e.code());
+            assertEquals("/foo/car", e.getPath());
         }
 
-        client.setData("/foo", "parent".getBytes(), -1);
-        expected.add(EventType.NodeDataChanged);
-        client.setData("/foo/bar", "child".getBytes(), -1);
-        expected.add(EventType.NodeDataChanged);
+        stat = client.setData("/foo", "parent".getBytes(), -1);
+        addEvent(expected, EventType.NodeDataChanged, "/foo", stat);
+        stat = client.setData("/foo/bar", "child".getBytes(), -1);
+        addEvent(expected, EventType.NodeDataChanged, "/foo/bar", stat);
 
         verify();
 
-        Assert.assertNotNull(lsnr.exists("/foo", true));
-        Assert.assertNotNull(lsnr.exists("/foo/bar", true));
+        assertNotNull(lsnr.exists("/foo", true));
+        assertNotNull(lsnr.exists("/foo/bar", true));
 
-        client.delete("/foo/bar", -1);
-        expected.add(EventType.NodeDeleted);
-        client.delete("/foo", -1);
-        expected.add(EventType.NodeDeleted);
+        long deleteZxid = delete("/foo/bar");
+        addEvent(expected, EventType.NodeDeleted, "/foo/bar", deleteZxid);
+        deleteZxid = delete("/foo");
+        addEvent(expected, EventType.NodeDeleted, "/foo", deleteZxid);
 
         verify();
     }
 
     @Test
-    public void testGetDataSync()
-        throws IOException, InterruptedException, KeeperException
-    {
+    public void testGetDataSync() throws IOException, InterruptedException, KeeperException {
         try {
             lsnr.getData("/foo", true, null);
-            Assert.fail();
+            fail();
         } catch (KeeperException e) {
-            Assert.assertEquals(KeeperException.Code.NONODE, e.code());
-            Assert.assertEquals("/foo", e.getPath());
+            assertEquals(KeeperException.Code.NONODE, e.code());
+            assertEquals("/foo", e.getPath());
         }
         try {
             lsnr.getData("/foo/bar", true, null);
-            Assert.fail();
+            fail();
         } catch (KeeperException e) {
-            Assert.assertEquals(KeeperException.Code.NONODE, e.code());
-            Assert.assertEquals("/foo/bar", e.getPath());
+            assertEquals(KeeperException.Code.NONODE, e.code());
+            assertEquals("/foo/bar", e.getPath());
         }
 
         client.create("/foo", "parent".getBytes(), Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
-        Assert.assertNotNull(lsnr.getData("/foo", true, null));
+        assertNotNull(lsnr.getData("/foo", true, null));
         client.create("/foo/bar", "child".getBytes(), Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
-        Assert.assertNotNull(lsnr.getData("/foo/bar", true, null));
+        assertNotNull(lsnr.getData("/foo/bar", true, null));
 
-        client.setData("/foo", "parent".getBytes(), -1);
-        expected.add(EventType.NodeDataChanged);
-        client.setData("/foo/bar", "child".getBytes(), -1);
-        expected.add(EventType.NodeDataChanged);
+        Stat stat = client.setData("/foo", "parent".getBytes(), -1);
+        addEvent(expected, EventType.NodeDataChanged, "/foo", stat);
+        stat = client.setData("/foo/bar", "child".getBytes(), -1);
+        addEvent(expected, EventType.NodeDataChanged, "/foo/bar", stat);
 
         verify();
 
-        Assert.assertNotNull(lsnr.getData("/foo", true, null));
-        Assert.assertNotNull(lsnr.getData("/foo/bar", true, null));
+        assertNotNull(lsnr.getData("/foo", true, null));
+        assertNotNull(lsnr.getData("/foo/bar", true, null));
 
-        client.delete("/foo/bar", -1);
-        expected.add(EventType.NodeDeleted);
-        client.delete("/foo", -1);
-        expected.add(EventType.NodeDeleted);
+        long deleteZxid = delete("/foo/bar");
+        addEvent(expected, EventType.NodeDeleted, "/foo/bar", deleteZxid);
+        deleteZxid = delete("/foo");
+        addEvent(expected, EventType.NodeDeleted, "/foo", deleteZxid);
 
         verify();
     }
 
     @Test
-    public void testGetChildrenSync()
-        throws IOException, InterruptedException, KeeperException
-    {
+    public void testGetChildrenSync() throws IOException, InterruptedException, KeeperException {
         try {
             lsnr.getChildren("/foo", true);
-            Assert.fail();
+            fail();
         } catch (KeeperException e) {
-            Assert.assertEquals(KeeperException.Code.NONODE, e.code());
-            Assert.assertEquals("/foo", e.getPath());
+            assertEquals(KeeperException.Code.NONODE, e.code());
+            assertEquals("/foo", e.getPath());
         }
         try {
             lsnr.getChildren("/foo/bar", true);
-            Assert.fail();
+            fail();
         } catch (KeeperException e) {
-            Assert.assertEquals(KeeperException.Code.NONODE, e.code());
-            Assert.assertEquals("/foo/bar", e.getPath());
+            assertEquals(KeeperException.Code.NONODE, e.code());
+            assertEquals("/foo/bar", e.getPath());
         }
 
         client.create("/foo", "parent".getBytes(), Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
-        Assert.assertNotNull(lsnr.getChildren("/foo", true));
+        assertNotNull(lsnr.getChildren("/foo", true));
 
-        client.create("/foo/bar", "child".getBytes(), Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
-        expected.add(EventType.NodeChildrenChanged); // /foo
-        Assert.assertNotNull(lsnr.getChildren("/foo/bar", true));
-
+        Stat stat = new Stat();
+        client.create("/foo/bar", "child".getBytes(), Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT, stat);
+        addEvent(expected, EventType.NodeChildrenChanged, "/foo", stat); // /foo
+        assertNotNull(lsnr.getChildren("/foo/bar", true));
 
         client.setData("/foo", "parent".getBytes(), -1);
         client.setData("/foo/bar", "child".getBytes(), -1);
 
+        assertNotNull(lsnr.exists("/foo", true));
 
-        Assert.assertNotNull(lsnr.exists("/foo", true));
+        assertNotNull(lsnr.getChildren("/foo", true));
+        assertNotNull(lsnr.getChildren("/foo/bar", true));
 
-        Assert.assertNotNull(lsnr.getChildren("/foo", true));
-        Assert.assertNotNull(lsnr.getChildren("/foo/bar", true));
-
-        client.delete("/foo/bar", -1);
-        expected.add(EventType.NodeDeleted); // /foo/bar childwatch
-        expected.add(EventType.NodeChildrenChanged); // /foo
-        client.delete("/foo", -1);
-        expected.add(EventType.NodeDeleted);
+        long deleteZxid = delete("/foo/bar");
+        addEvent(expected, EventType.NodeDeleted, "/foo/bar", deleteZxid); // /foo/bar childwatch
+        addEvent(expected, EventType.NodeChildrenChanged, "/foo", deleteZxid); // /foo
+        deleteZxid = delete("/foo");
+        addEvent(expected, EventType.NodeDeleted, "/foo", deleteZxid);
 
         verify();
     }
 
     @Test
-    public void testExistsSyncWObj()
-        throws IOException, InterruptedException, KeeperException
-    {
+    public void testExistsSyncWObj() throws IOException, InterruptedException, KeeperException {
         SimpleWatcher w1 = new SimpleWatcher(null);
         SimpleWatcher w2 = new SimpleWatcher(null);
         SimpleWatcher w3 = new SimpleWatcher(null);
         SimpleWatcher w4 = new SimpleWatcher(null);
 
-        List<EventType> e2 = new ArrayList<EventType>();
+        List<WatchedEvent> e2 = new ArrayList<>();
 
-        Assert.assertNull(lsnr.exists("/foo", true));
-        Assert.assertNull(lsnr.exists("/foo", w1));
+        assertNull(lsnr.exists("/foo", true));
+        assertNull(lsnr.exists("/foo", w1));
 
-        Assert.assertNull(lsnr.exists("/foo/bar", w2));
-        Assert.assertNull(lsnr.exists("/foo/bar", w3));
-        Assert.assertNull(lsnr.exists("/foo/bar", w3));
-        Assert.assertNull(lsnr.exists("/foo/bar", w4));
+        assertNull(lsnr.exists("/foo/bar", w2));
+        assertNull(lsnr.exists("/foo/bar", w3));
+        assertNull(lsnr.exists("/foo/bar", w3));
+        assertNull(lsnr.exists("/foo/bar", w4));
 
-        client.create("/foo", "parent".getBytes(), Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
-        expected.add(EventType.NodeCreated);
-        client.create("/foo/bar", "child".getBytes(), Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
-        e2.add(EventType.NodeCreated);
+        Stat stat = new Stat();
+        client.create("/foo", "parent".getBytes(), Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT, stat);
+        addEvent(expected, EventType.NodeCreated, "/foo", stat);
+        client.create("/foo/bar", "child".getBytes(), Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT, stat);
+        addEvent(e2, EventType.NodeCreated, "/foo/bar", stat);
 
         lsnr_dwatch.verify(expected);
         w1.verify(expected);
@@ -294,19 +315,19 @@ public class WatcherFuncTest extends ClientBase {
         e2.clear();
 
         // default not registered
-        Assert.assertNotNull(lsnr.exists("/foo", w1));
+        assertNotNull(lsnr.exists("/foo", w1));
 
-        Assert.assertNotNull(lsnr.exists("/foo/bar", w2));
-        Assert.assertNotNull(lsnr.exists("/foo/bar", w3));
-        Assert.assertNotNull(lsnr.exists("/foo/bar", w4));
-        Assert.assertNotNull(lsnr.exists("/foo/bar", w4));
+        assertNotNull(lsnr.exists("/foo/bar", w2));
+        assertNotNull(lsnr.exists("/foo/bar", w3));
+        assertNotNull(lsnr.exists("/foo/bar", w4));
+        assertNotNull(lsnr.exists("/foo/bar", w4));
 
-        client.setData("/foo", "parent".getBytes(), -1);
-        expected.add(EventType.NodeDataChanged);
-        client.setData("/foo/bar", "child".getBytes(), -1);
-        e2.add(EventType.NodeDataChanged);
+        stat = client.setData("/foo", "parent".getBytes(), -1);
+        addEvent(expected, EventType.NodeDataChanged, "/foo", stat);
+        stat = client.setData("/foo/bar", "child".getBytes(), -1);
+        addEvent(e2, EventType.NodeDataChanged, "/foo/bar", stat);
 
-        lsnr_dwatch.verify(new ArrayList<EventType>()); // not reg so should = 0
+        lsnr_dwatch.verify(new ArrayList<>()); // not reg so should = 0
         w1.verify(expected);
         w2.verify(e2);
         w3.verify(e2);
@@ -314,19 +335,19 @@ public class WatcherFuncTest extends ClientBase {
         expected.clear();
         e2.clear();
 
-        Assert.assertNotNull(lsnr.exists("/foo", true));
-        Assert.assertNotNull(lsnr.exists("/foo", w1));
-        Assert.assertNotNull(lsnr.exists("/foo", w1));
+        assertNotNull(lsnr.exists("/foo", true));
+        assertNotNull(lsnr.exists("/foo", w1));
+        assertNotNull(lsnr.exists("/foo", w1));
 
-        Assert.assertNotNull(lsnr.exists("/foo/bar", w2));
-        Assert.assertNotNull(lsnr.exists("/foo/bar", w2));
-        Assert.assertNotNull(lsnr.exists("/foo/bar", w3));
-        Assert.assertNotNull(lsnr.exists("/foo/bar", w4));
+        assertNotNull(lsnr.exists("/foo/bar", w2));
+        assertNotNull(lsnr.exists("/foo/bar", w2));
+        assertNotNull(lsnr.exists("/foo/bar", w3));
+        assertNotNull(lsnr.exists("/foo/bar", w4));
 
-        client.delete("/foo/bar", -1);
-        expected.add(EventType.NodeDeleted);
-        client.delete("/foo", -1);
-        e2.add(EventType.NodeDeleted);
+        long deleteZxid = delete("/foo/bar");
+        addEvent(e2, EventType.NodeDeleted, "/foo/bar", deleteZxid);
+        deleteZxid = delete("/foo");
+        addEvent(expected, EventType.NodeDeleted, "/foo", deleteZxid);
 
         lsnr_dwatch.verify(expected);
         w1.verify(expected);
@@ -335,48 +356,45 @@ public class WatcherFuncTest extends ClientBase {
         w4.verify(e2);
         expected.clear();
         e2.clear();
-
     }
 
     @Test
-    public void testGetDataSyncWObj()
-        throws IOException, InterruptedException, KeeperException
-    {
+    public void testGetDataSyncWObj() throws IOException, InterruptedException, KeeperException {
         SimpleWatcher w1 = new SimpleWatcher(null);
         SimpleWatcher w2 = new SimpleWatcher(null);
         SimpleWatcher w3 = new SimpleWatcher(null);
         SimpleWatcher w4 = new SimpleWatcher(null);
 
-        List<EventType> e2 = new ArrayList<EventType>();
+        List<WatchedEvent> e2 = new ArrayList<>();
 
         try {
             lsnr.getData("/foo", w1, null);
-            Assert.fail();
+            fail();
         } catch (KeeperException e) {
-            Assert.assertEquals(KeeperException.Code.NONODE, e.code());
-            Assert.assertEquals("/foo", e.getPath());
+            assertEquals(KeeperException.Code.NONODE, e.code());
+            assertEquals("/foo", e.getPath());
         }
         try {
             lsnr.getData("/foo/bar", w2, null);
-            Assert.fail();
+            fail();
         } catch (KeeperException e) {
-            Assert.assertEquals(KeeperException.Code.NONODE, e.code());
-            Assert.assertEquals("/foo/bar", e.getPath());
+            assertEquals(KeeperException.Code.NONODE, e.code());
+            assertEquals("/foo/bar", e.getPath());
         }
 
         client.create("/foo", "parent".getBytes(), Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
-        Assert.assertNotNull(lsnr.getData("/foo", true, null));
-        Assert.assertNotNull(lsnr.getData("/foo", w1, null));
+        assertNotNull(lsnr.getData("/foo", true, null));
+        assertNotNull(lsnr.getData("/foo", w1, null));
         client.create("/foo/bar", "child".getBytes(), Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
-        Assert.assertNotNull(lsnr.getData("/foo/bar", w2, null));
-        Assert.assertNotNull(lsnr.getData("/foo/bar", w3, null));
-        Assert.assertNotNull(lsnr.getData("/foo/bar", w4, null));
-        Assert.assertNotNull(lsnr.getData("/foo/bar", w4, null));
+        assertNotNull(lsnr.getData("/foo/bar", w2, null));
+        assertNotNull(lsnr.getData("/foo/bar", w3, null));
+        assertNotNull(lsnr.getData("/foo/bar", w4, null));
+        assertNotNull(lsnr.getData("/foo/bar", w4, null));
 
-        client.setData("/foo", "parent".getBytes(), -1);
-        expected.add(EventType.NodeDataChanged);
-        client.setData("/foo/bar", "child".getBytes(), -1);
-        e2.add(EventType.NodeDataChanged);
+        Stat stat = client.setData("/foo", "parent".getBytes(), -1);
+        addEvent(expected, EventType.NodeDataChanged, "/foo", stat);
+        stat = client.setData("/foo/bar", "child".getBytes(), -1);
+        addEvent(e2, EventType.NodeDataChanged, "/foo/bar", stat);
 
         lsnr_dwatch.verify(expected);
         w1.verify(expected);
@@ -386,17 +404,17 @@ public class WatcherFuncTest extends ClientBase {
         expected.clear();
         e2.clear();
 
-        Assert.assertNotNull(lsnr.getData("/foo", true, null));
-        Assert.assertNotNull(lsnr.getData("/foo", w1, null));
-        Assert.assertNotNull(lsnr.getData("/foo/bar", w2, null));
-        Assert.assertNotNull(lsnr.getData("/foo/bar", w3, null));
-        Assert.assertNotNull(lsnr.getData("/foo/bar", w3, null));
-        Assert.assertNotNull(lsnr.getData("/foo/bar", w4, null));
+        assertNotNull(lsnr.getData("/foo", true, null));
+        assertNotNull(lsnr.getData("/foo", w1, null));
+        assertNotNull(lsnr.getData("/foo/bar", w2, null));
+        assertNotNull(lsnr.getData("/foo/bar", w3, null));
+        assertNotNull(lsnr.getData("/foo/bar", w3, null));
+        assertNotNull(lsnr.getData("/foo/bar", w4, null));
 
-        client.delete("/foo/bar", -1);
-        expected.add(EventType.NodeDeleted);
-        client.delete("/foo", -1);
-        e2.add(EventType.NodeDeleted);
+        long deleteZxid = delete("/foo/bar");
+        addEvent(e2, EventType.NodeDeleted, "/foo/bar", deleteZxid);
+        deleteZxid = delete("/foo");
+        addEvent(expected, EventType.NodeDeleted, "/foo", deleteZxid);
 
         lsnr_dwatch.verify(expected);
         w1.verify(expected);
@@ -408,64 +426,61 @@ public class WatcherFuncTest extends ClientBase {
     }
 
     @Test
-    public void testGetChildrenSyncWObj()
-        throws IOException, InterruptedException, KeeperException
-    {
+    public void testGetChildrenSyncWObj() throws IOException, InterruptedException, KeeperException {
         SimpleWatcher w1 = new SimpleWatcher(null);
         SimpleWatcher w2 = new SimpleWatcher(null);
         SimpleWatcher w3 = new SimpleWatcher(null);
         SimpleWatcher w4 = new SimpleWatcher(null);
 
-        List<EventType> e2 = new ArrayList<EventType>();
+        List<WatchedEvent> e2 = new ArrayList<>();
 
         try {
             lsnr.getChildren("/foo", true);
-            Assert.fail();
+            fail();
         } catch (KeeperException e) {
-            Assert.assertEquals(KeeperException.Code.NONODE, e.code());
-            Assert.assertEquals("/foo", e.getPath());
+            assertEquals(KeeperException.Code.NONODE, e.code());
+            assertEquals("/foo", e.getPath());
         }
         try {
             lsnr.getChildren("/foo/bar", true);
-            Assert.fail();
+            fail();
         } catch (KeeperException e) {
-            Assert.assertEquals(KeeperException.Code.NONODE, e.code());
-            Assert.assertEquals("/foo/bar", e.getPath());
+            assertEquals(KeeperException.Code.NONODE, e.code());
+            assertEquals("/foo/bar", e.getPath());
         }
 
         client.create("/foo", "parent".getBytes(), Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
-        Assert.assertNotNull(lsnr.getChildren("/foo", true));
-        Assert.assertNotNull(lsnr.getChildren("/foo", w1));
+        assertNotNull(lsnr.getChildren("/foo", true));
+        assertNotNull(lsnr.getChildren("/foo", w1));
 
-        client.create("/foo/bar", "child".getBytes(), Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
-        expected.add(EventType.NodeChildrenChanged); // /foo
-        Assert.assertNotNull(lsnr.getChildren("/foo/bar", w2));
-        Assert.assertNotNull(lsnr.getChildren("/foo/bar", w2));
-        Assert.assertNotNull(lsnr.getChildren("/foo/bar", w3));
-        Assert.assertNotNull(lsnr.getChildren("/foo/bar", w4));
-
+        Stat stat = new Stat();
+        client.create("/foo/bar", "child".getBytes(), Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT, stat);
+        addEvent(expected, EventType.NodeChildrenChanged, "/foo", stat); // /foo
+        assertNotNull(lsnr.getChildren("/foo/bar", w2));
+        assertNotNull(lsnr.getChildren("/foo/bar", w2));
+        assertNotNull(lsnr.getChildren("/foo/bar", w3));
+        assertNotNull(lsnr.getChildren("/foo/bar", w4));
 
         client.setData("/foo", "parent".getBytes(), -1);
         client.setData("/foo/bar", "child".getBytes(), -1);
 
+        assertNotNull(lsnr.exists("/foo", true));
+        assertNotNull(lsnr.exists("/foo", w1));
+        assertNotNull(lsnr.exists("/foo", true));
+        assertNotNull(lsnr.exists("/foo", w1));
 
-        Assert.assertNotNull(lsnr.exists("/foo", true));
-        Assert.assertNotNull(lsnr.exists("/foo", w1));
-        Assert.assertNotNull(lsnr.exists("/foo", true));
-        Assert.assertNotNull(lsnr.exists("/foo", w1));
+        assertNotNull(lsnr.getChildren("/foo", true));
+        assertNotNull(lsnr.getChildren("/foo", w1));
+        assertNotNull(lsnr.getChildren("/foo/bar", w2));
+        assertNotNull(lsnr.getChildren("/foo/bar", w3));
+        assertNotNull(lsnr.getChildren("/foo/bar", w4));
+        assertNotNull(lsnr.getChildren("/foo/bar", w4));
 
-        Assert.assertNotNull(lsnr.getChildren("/foo", true));
-        Assert.assertNotNull(lsnr.getChildren("/foo", w1));
-        Assert.assertNotNull(lsnr.getChildren("/foo/bar", w2));
-        Assert.assertNotNull(lsnr.getChildren("/foo/bar", w3));
-        Assert.assertNotNull(lsnr.getChildren("/foo/bar", w4));
-        Assert.assertNotNull(lsnr.getChildren("/foo/bar", w4));
-
-        client.delete("/foo/bar", -1);
-        e2.add(EventType.NodeDeleted); // /foo/bar childwatch
-        expected.add(EventType.NodeChildrenChanged); // /foo
-        client.delete("/foo", -1);
-        expected.add(EventType.NodeDeleted);
+        long deleteZxid = delete("/foo/bar");
+        addEvent(e2, EventType.NodeDeleted, "/foo/bar", deleteZxid);
+        addEvent(expected, EventType.NodeChildrenChanged, "/foo", deleteZxid); // /foo
+        deleteZxid = delete("/foo");
+        addEvent(expected, EventType.NodeDeleted, "/foo", deleteZxid);
 
         lsnr_dwatch.verify(expected);
         w1.verify(expected);
@@ -475,4 +490,5 @@ public class WatcherFuncTest extends ClientBase {
         expected.clear();
         e2.clear();
     }
+
 }

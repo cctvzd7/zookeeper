@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,38 +15,56 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.zookeeper.cli;
 
 import java.io.PrintStream;
 import java.util.Map;
+import javax.annotation.Nullable;
+import org.apache.commons.cli.Options;
 import org.apache.zookeeper.ZooKeeper;
 
 /**
  * base class for all CLI commands
  */
-abstract public class CliCommand {
+public abstract class CliCommand {
+
     protected ZooKeeper zk;
     protected PrintStream out;
     protected PrintStream err;
     private String cmdStr;
     private String optionStr;
+    @Nullable
+    private Options options;
 
     /**
      * a CLI command with command string and options.
      * Using System.out and System.err for printing
      * @param cmdStr the string used to call this command
-     * @param optionStr the string used to call this command 
+     * @param optionStr the string used to call this command
      */
     public CliCommand(String cmdStr, String optionStr) {
+        this(cmdStr, optionStr, null);
+    }
+
+    /**
+     * a CLI command with command string and options.
+     * Using System.out and System.err for printing
+     * @param cmdStr the string used to call this command
+     * @param optionStr the string used to call this command
+     * @param options the command options
+     */
+    public CliCommand(String cmdStr, String optionStr, Options options) {
         this.out = System.out;
         this.err = System.err;
         this.cmdStr = cmdStr;
         this.optionStr = optionStr;
+        this.options = options;
     }
 
     /**
      * Set out printStream (usable for testing)
-     * @param out 
+     * @param out
      */
     public void setOut(PrintStream out) {
         this.out = out;
@@ -54,7 +72,7 @@ abstract public class CliCommand {
 
     /**
      * Set err printStream (usable for testing)
-     * @param err 
+     * @param err
      */
     public void setErr(PrintStream err) {
         this.err = err;
@@ -70,7 +88,6 @@ abstract public class CliCommand {
 
     /**
      * get the string used to call this command
-     * @return 
      */
     public String getCmdStr() {
         return cmdStr;
@@ -78,7 +95,6 @@ abstract public class CliCommand {
 
     /**
      * get the option string
-     * @return 
      */
     public String getOptionStr() {
         return optionStr;
@@ -86,32 +102,32 @@ abstract public class CliCommand {
 
     /**
      * get a usage string, contains the command and the options
-     * @return 
      */
     public String getUsageStr() {
-        return cmdStr + " " + optionStr;
+        return CommandUsageHelper.getUsage(cmdStr + " " + optionStr, options);
     }
 
     /**
      * add this command to a map. Use the command string as key.
-     * @param cmdMap 
+     * @param cmdMap
      */
     public void addToMap(Map<String, CliCommand> cmdMap) {
         cmdMap.put(cmdStr, this);
     }
-    
+
     /**
      * parse the command arguments
      * @param cmdArgs
      * @return this CliCommand
      * @throws CliParseException
      */
-    abstract public CliCommand parse(String cmdArgs[]) throws CliParseException;
-    
+    public abstract CliCommand parse(String[] cmdArgs) throws CliParseException;
+
     /**
-     * 
-     * @return
+     *
+     * @return true if command has watch option, false otherwise
      * @throws CliException
      */
-    abstract public boolean exec() throws CliException;
+    public abstract boolean exec() throws CliException;
+
 }

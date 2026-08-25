@@ -42,9 +42,11 @@ extern "C" {
 #define ZOO_REMOVE_WATCHES 18
 #define ZOO_CREATE_CONTAINER_OP 19
 #define ZOO_DELETE_CONTAINER_OP 20
+#define ZOO_CREATE_TTL_OP 21
 #define ZOO_CLOSE_OP -11
 #define ZOO_SETAUTH_OP 100
 #define ZOO_SETWATCHES_OP 101
+#define ZOO_SASL_OP 102
 
 #ifdef __cplusplus
 }

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,19 +18,18 @@
 
 package org.apache.zookeeper.server.quorum;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
-import static org.mockito.Matchers.eq;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
-
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import org.apache.zookeeper.PortAssignment;
 import org.apache.zookeeper.server.ServerCnxnFactory;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 public class LocalPeerBeanTest {
 
@@ -86,7 +85,7 @@ public class LocalPeerBeanTest {
     public void testLocalPeerIsLeader() throws Exception {
         long localPeerId = 7;
         QuorumPeer peer = mock(QuorumPeer.class);
-        when(peer.getId()).thenReturn(localPeerId);
+        when(peer.getMyId()).thenReturn(localPeerId);
         when(peer.isLeader(eq(localPeerId))).thenReturn(true);
         LocalPeerBean localPeerBean = new LocalPeerBean(peer);
         assertTrue(localPeerBean.isLeader());
@@ -96,7 +95,7 @@ public class LocalPeerBeanTest {
     public void testLocalPeerIsNotLeader() throws Exception {
         long localPeerId = 7;
         QuorumPeer peer = mock(QuorumPeer.class);
-        when(peer.getId()).thenReturn(localPeerId);
+        when(peer.getMyId()).thenReturn(localPeerId);
         when(peer.isLeader(eq(localPeerId))).thenReturn(false);
         LocalPeerBean localPeerBean = new LocalPeerBean(peer);
         assertFalse(localPeerBean.isLeader());

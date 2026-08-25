@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,26 +19,30 @@
 package org.apache.zookeeper.server.quorum.flexible;
 
 import java.util.HashMap;
-import java.util.Set;
 import java.util.Map;
-import java.util.Properties;
 import java.util.Map.Entry;
-
+import java.util.Properties;
+import java.util.Set;
+import org.apache.zookeeper.common.ConfigException;
 import org.apache.zookeeper.server.quorum.QuorumPeer.LearnerType;
 import org.apache.zookeeper.server.quorum.QuorumPeer.QuorumServer;
-import org.apache.zookeeper.server.quorum.QuorumPeerConfig.ConfigException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * This class implements a validator for majority quorums. The implementation is
  * straightforward.
- * 
+ *
  */
 public class QuorumMaj implements QuorumVerifier {
-    private Map<Long, QuorumServer> allMembers = new HashMap<Long, QuorumServer>();
-    private Map<Long, QuorumServer> votingMembers = new HashMap<Long, QuorumServer>();
-    private Map<Long, QuorumServer> observingMembers = new HashMap<Long, QuorumServer>();
+
+    private static final Logger LOG = LoggerFactory.getLogger(QuorumMaj.class);
+
+    private Map<Long, QuorumServer> allMembers = new HashMap<>();
+    private Map<Long, QuorumServer> votingMembers = new HashMap<>();
+    private Map<Long, QuorumServer> observingMembers = new HashMap<>();
     private long version = 0;
-    private int half;
+    protected int half;
 
     public int hashCode() {
         assert false : "hashCode not designed";
@@ -50,21 +54,24 @@ public class QuorumMaj implements QuorumVerifier {
             return false;
         }
         QuorumMaj qm = (QuorumMaj) o;
-        if (qm.getVersion() == version)
+        if (qm.getVersion() == version) {
             return true;
-        if (allMembers.size() != qm.getAllMembers().size())
+        }
+        if (allMembers.size() != qm.getAllMembers().size()) {
             return false;
+        }
         for (QuorumServer qs : allMembers.values()) {
             QuorumServer qso = qm.getAllMembers().get(qs.id);
-            if (qso == null || !qs.equals(qso))
+            if (qso == null || !qs.equals(qso)) {
                 return false;
+            }
         }
         return true;
     }
 
     /**
      * Defines a majority to avoid computing it every time.
-     * 
+     *
      */
     public QuorumMaj(Map<Long, QuorumServer> allMembers) {
         this.allMembers = allMembers;
@@ -88,9 +95,9 @@ public class QuorumMaj implements QuorumVerifier {
                 long sid = Long.parseLong(key.substring(dot + 1));
                 QuorumServer qs = new QuorumServer(sid, value);
                 allMembers.put(Long.valueOf(sid), qs);
-                if (qs.type == LearnerType.PARTICIPANT)
+                if (qs.type == LearnerType.PARTICIPANT) {
                     votingMembers.put(Long.valueOf(sid), qs);
-                else {
+                } else {
                     observingMembers.put(Long.valueOf(sid), qs);
                 }
             } else if (key.equals("version")) {
@@ -102,11 +109,11 @@ public class QuorumMaj implements QuorumVerifier {
 
     /**
      * Returns weight of 1 by default.
-     * 
+     *
      * @param id
      */
     public long getWeight(long id) {
-        return (long) 1;
+        return 1;
     }
 
     public String toString() {
@@ -124,7 +131,7 @@ public class QuorumMaj implements QuorumVerifier {
         sw.append("version=");
         sw.append(hexVersion);
         return sw.toString();
-    }    
+    }
 
     /**
      * Verifies if a set is a majority. Assumes that ackSet contains acks only
@@ -149,8 +156,9 @@ public class QuorumMaj implements QuorumVerifier {
     public long getVersion() {
         return version;
     }
-    
+
     public void setVersion(long ver) {
         version = ver;
     }
+
 }

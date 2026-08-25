@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,16 +18,19 @@
 
 package org.apache.zookeeper.common;
 
+import static org.apache.zookeeper.common.LogRedactor.redactSensitiveValues;
+import static org.apache.zookeeper.common.LogRedactor.redactValue;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.lang.reflect.Constructor;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Properties;
-
 import org.apache.zookeeper.Environment;
-import org.apache.zookeeper.server.quorum.QuorumPeerConfig.ConfigException;
 import org.apache.zookeeper.server.util.VerifyingFileFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -52,7 +55,7 @@ public class ZKConfig {
     public static final String KINIT_COMMAND = "zookeeper.kinit";
     public static final String JGSS_NATIVE = "sun.security.jgss.native";
 
-    private final Map<String, String> properties = new HashMap<String, String>();
+    private final Map<String, String> properties = new HashMap<>();
 
     /**
      * properties, which are common to both client and server, are initialized
@@ -63,26 +66,47 @@ public class ZKConfig {
     }
 
     /**
+     * <p><b>Use {@link ZKConfig#ZKConfig(Path configPath)} instead.</b>
+     *
+     * <p><b>The signature of this method has been changed to throw {@link ConfigException}
+     * instead of {@code QuorumPeerConfig.ConfigException}.</b>
+     *
      * @param configPath
      *            Configuration file path
      * @throws ConfigException
      *             if failed to load configuration properties
      */
-
+    @Deprecated
     public ZKConfig(String configPath) throws ConfigException {
-        this(new File(configPath));
+        this(Paths.get(configPath));
     }
 
     /**
+     * <p><b>Use {@link ZKConfig#ZKConfig(Path configPath)} instead.</b>
+     *
+     * <p><b>The signature of this method has been changed to throw {@link ConfigException}
+     * instead of {@code QuorumPeerConfig.ConfigException}.</b>
      *
      * @param configFile
      *            Configuration file
      * @throws ConfigException
      *             if failed to load configuration properties
      */
+    @Deprecated
     public ZKConfig(File configFile) throws ConfigException {
+        this(configFile.toPath());
+    }
+
+    /**
+     * Constructs a {@link ZKConfig} with properties from file.
+     *
+     * @param configPath path to configuration file
+     * @throws ConfigException
+     */
+    public ZKConfig(Path configPath) throws ConfigException {
         this();
-        addConfiguration(configFile);
+        addConfiguration(configPath);
+        LOG.info("ZK Config {}", redactSensitiveValues(properties));
     }
 
     private void init() {
@@ -105,46 +129,36 @@ public class ZKConfig {
 
         try (ClientX509Util clientX509Util = new ClientX509Util()) {
             putSSLProperties(clientX509Util);
-            properties.put(clientX509Util.getSslAuthProviderProperty(),
-                    System.getProperty(clientX509Util.getSslAuthProviderProperty()));
+            properties.put(clientX509Util.getSslAuthProviderProperty(), System.getProperty(clientX509Util.getSslAuthProviderProperty()));
+            properties.put(clientX509Util.getSslProviderProperty(), System.getProperty(clientX509Util.getSslProviderProperty()));
         }
 
         try (X509Util x509Util = new QuorumX509Util()) {
             putSSLProperties(x509Util);
         }
     }
-    
+
     private void putSSLProperties(X509Util x509Util) {
-        properties.put(x509Util.getSslProtocolProperty(),
-                System.getProperty(x509Util.getSslProtocolProperty()));
-        properties.put(x509Util.getSslEnabledProtocolsProperty(),
-                System.getProperty(x509Util.getSslEnabledProtocolsProperty()));
-        properties.put(x509Util.getSslCipherSuitesProperty(),
-                System.getProperty(x509Util.getSslCipherSuitesProperty()));
-        properties.put(x509Util.getSslKeystoreLocationProperty(),
-                System.getProperty(x509Util.getSslKeystoreLocationProperty()));
-        properties.put(x509Util.getSslKeystorePasswdProperty(),
-                System.getProperty(x509Util.getSslKeystorePasswdProperty()));
-        properties.put(x509Util.getSslKeystoreTypeProperty(),
-                System.getProperty(x509Util.getSslKeystoreTypeProperty()));
-        properties.put(x509Util.getSslTruststoreLocationProperty(),
-                System.getProperty(x509Util.getSslTruststoreLocationProperty()));
-        properties.put(x509Util.getSslTruststorePasswdProperty(),
-                System.getProperty(x509Util.getSslTruststorePasswdProperty()));
-        properties.put(x509Util.getSslTruststoreTypeProperty(),
-                System.getProperty(x509Util.getSslTruststoreTypeProperty()));
-        properties.put(x509Util.getSslContextSupplierClassProperty(),
-                System.getProperty(x509Util.getSslContextSupplierClassProperty()));
-        properties.put(x509Util.getSslHostnameVerificationEnabledProperty(),
-                System.getProperty(x509Util.getSslHostnameVerificationEnabledProperty()));
-        properties.put(x509Util.getSslCrlEnabledProperty(),
-                System.getProperty(x509Util.getSslCrlEnabledProperty()));
-        properties.put(x509Util.getSslOcspEnabledProperty(),
-                System.getProperty(x509Util.getSslOcspEnabledProperty()));
-        properties.put(x509Util.getSslClientAuthProperty(),
-                System.getProperty(x509Util.getSslClientAuthProperty()));
-        properties.put(x509Util.getSslHandshakeDetectionTimeoutMillisProperty(),
-                System.getProperty(x509Util.getSslHandshakeDetectionTimeoutMillisProperty()));
+        properties.put(x509Util.getSslProtocolProperty(), System.getProperty(x509Util.getSslProtocolProperty()));
+        properties.put(x509Util.getSslEnabledProtocolsProperty(), System.getProperty(x509Util.getSslEnabledProtocolsProperty()));
+        properties.put(x509Util.getSslCipherSuitesProperty(), System.getProperty(x509Util.getSslCipherSuitesProperty()));
+        properties.put(x509Util.getSslKeystoreLocationProperty(), System.getProperty(x509Util.getSslKeystoreLocationProperty()));
+        properties.put(x509Util.getSslKeystorePasswdProperty(), System.getProperty(x509Util.getSslKeystorePasswdProperty()));
+        properties.put(x509Util.getSslKeystorePasswdPathProperty(), System.getProperty(x509Util.getSslKeystorePasswdPathProperty()));
+        properties.put(x509Util.getSslKeystoreTypeProperty(), System.getProperty(x509Util.getSslKeystoreTypeProperty()));
+        properties.put(x509Util.getSslTruststoreLocationProperty(), System.getProperty(x509Util.getSslTruststoreLocationProperty()));
+        properties.put(x509Util.getSslTruststorePasswdProperty(), System.getProperty(x509Util.getSslTruststorePasswdProperty()));
+        properties.put(x509Util.getSslTruststorePasswdPathProperty(), System.getProperty(x509Util.getSslTruststorePasswdPathProperty()));
+        properties.put(x509Util.getSslTruststoreTypeProperty(), System.getProperty(x509Util.getSslTruststoreTypeProperty()));
+        properties.put(x509Util.getSslContextSupplierClassProperty(), System.getProperty(x509Util.getSslContextSupplierClassProperty()));
+        properties.put(x509Util.getSslClientHostnameVerificationEnabledProperty(), System.getProperty(x509Util.getSslClientHostnameVerificationEnabledProperty()));
+        properties.put(x509Util.getSslHostnameVerificationEnabledProperty(), System.getProperty(x509Util.getSslHostnameVerificationEnabledProperty()));
+        properties.put(x509Util.getSslAllowReverseDnsLookupProperty(), System.getProperty(x509Util.getSslAllowReverseDnsLookupProperty()));
+        properties.put(x509Util.getSslCrlEnabledProperty(), System.getProperty(x509Util.getSslCrlEnabledProperty()));
+        properties.put(x509Util.getSslOcspEnabledProperty(), System.getProperty(x509Util.getSslOcspEnabledProperty()));
+        properties.put(x509Util.getSslClientAuthProperty(), System.getProperty(x509Util.getSslClientAuthProperty()));
+        properties.put(x509Util.getSslHandshakeDetectionTimeoutMillisProperty(), System.getProperty(x509Util.getSslHandshakeDetectionTimeoutMillisProperty()));
+        properties.put(x509Util.getFipsModeProperty(), System.getProperty(x509Util.getFipsModeProperty()));
     }
 
     /**
@@ -184,7 +198,7 @@ public class ZKConfig {
      * key can not be <code>null</code>. If key is already mapped then the old
      * value of the <code>key</code> is replaced by the specified
      * <code>value</code>.
-     * 
+     *
      * @param key
      * @param value
      */
@@ -193,48 +207,77 @@ public class ZKConfig {
             throw new IllegalArgumentException("property key is null.");
         }
         String oldValue = properties.put(key, value);
-        if (LOG.isDebugEnabled()) {
-            if (null != oldValue && !oldValue.equals(value)) {
-                LOG.debug("key {}'s value {} is replaced with new value {}", key, oldValue, value);
-            }
+        if (null != oldValue && !oldValue.equals(value)) {
+            LOG.debug("key {}'s value {} is replaced with new value {}", key, redactValue(key, oldValue), redactValue(key, value));
         }
     }
 
     /**
      * Add a configuration resource. The properties form this configuration will
+     * overwrite corresponding already loaded property and system property
+     *
+     * @param configPath path to Configuration file.
+     */
+    public void addConfiguration(Path configPath) throws ConfigException {
+        Path absoluteConfigPath = configPath.toAbsolutePath();
+        LOG.info("Reading configuration from: {}", absoluteConfigPath);
+        try {
+            File configFile = (new VerifyingFileFactory.Builder(LOG).warnForRelativePath()
+                                                               .failForNonExistingPath()
+                                                               .build()).validate(configPath.toFile());
+            Properties cfg = new Properties();
+            try (FileInputStream in = new FileInputStream(configFile)) {
+                cfg.load(in);
+            }
+            parseProperties(cfg);
+        } catch (IOException | IllegalArgumentException e) {
+            LOG.error("Error while configuration from: {}", absoluteConfigPath, e);
+            String msg = "Error while processing " + absoluteConfigPath;
+            try {
+                Class<?> clazz = Class.forName("org.apache.zookeeper.server.quorum.QuorumPeerConfig.ConfigException");
+                Class<? extends ConfigException> exceptionClass = clazz.asSubclass(ConfigException.class);
+                Constructor<? extends ConfigException> constructor = exceptionClass.getDeclaredConstructor(String.class, Exception.class);
+                throw constructor.newInstance(msg, e);
+            } catch (ClassNotFoundException ignored) {
+            } catch (Exception ignored) {
+                LOG.warn("Fail to construct QuorumPeerConfig.ConfigException", e);
+            }
+            throw new ConfigException(msg, e);
+        }
+    }
+
+    /**
+     * <p><b>Use {@link #addConfiguration(Path)} instead.</b></p>
+     *
+     * <p><b>The signature of this method has been changed to throw {@link ConfigException}
+     * instead of {@code QuorumPeerConfig.ConfigException}.</b>
+     *
+     * <p>Add a configuration resource. The properties form this configuration will
      * overwrite corresponding already loaded property and system property
      *
      * @param configFile
      *            Configuration file.
      */
+    @Deprecated
     public void addConfiguration(File configFile) throws ConfigException {
-        LOG.info("Reading configuration from: {}", configFile.getAbsolutePath());
-        try {
-            configFile = (new VerifyingFileFactory.Builder(LOG).warnForRelativePath().failForNonExistingPath().build())
-                    .validate(configFile);
-            Properties cfg = new Properties();
-            FileInputStream in = new FileInputStream(configFile);
-            try {
-                cfg.load(in);
-            } finally {
-                in.close();
-            }
-            parseProperties(cfg);
-        } catch (IOException | IllegalArgumentException e) {
-            LOG.error("Error while configuration from: {}", configFile.getAbsolutePath(), e);
-            throw new ConfigException("Error while processing " + configFile.getAbsolutePath(), e);
-        }
+        addConfiguration(configFile.toPath());
     }
 
     /**
-     * Add a configuration resource. The properties form this configuration will
+     * <p><b>Use {@link #addConfiguration(Path)} instead.</b></p>
+     *
+     * <p><b>The signature of this method has been changed to throw {@link ConfigException}
+     * instead of {@code QuorumPeerConfig.ConfigException}.</b>
+     *
+     * <p>Add a configuration resource. The properties form this configuration will
      * overwrite corresponding already loaded property and system property
      *
      * @param configPath
      *            Configuration file path.
      */
+    @Deprecated
     public void addConfiguration(String configPath) throws ConfigException {
-        addConfiguration(new File(configPath));
+        addConfiguration(Paths.get(configPath));
     }
 
     private void parseProperties(Properties cfg) {
@@ -271,14 +314,14 @@ public class ZKConfig {
         if (propertyValue == null) {
             return defaultValue;
         } else {
-            return Boolean.parseBoolean(propertyValue);
+            return Boolean.parseBoolean(propertyValue.trim());
         }
     }
 
     /**
      * Get the value of the <code>key</code> property as an <code>int</code>. If
      * property is not set, the provided <code>defaultValue</code> is returned
-     * 
+     *
      * @param key
      *            property key.
      * @param defaultValue
@@ -291,9 +334,8 @@ public class ZKConfig {
     public int getInt(String key, int defaultValue) {
         String value = getProperty(key);
         if (value != null) {
-            return Integer.parseInt(value.trim());
+            return Integer.decode(value.trim());
         }
         return defaultValue;
     }
-
 }

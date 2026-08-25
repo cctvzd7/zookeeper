@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,45 +18,80 @@
 
 package org.apache.zookeeper.server;
 
+import java.util.Objects;
 import org.apache.zookeeper.common.Time;
 import org.slf4j.Logger;
 
+/**
+ * This logs the message once in the beginning and once every LOG_INTERVAL.
+ */
 public class RateLogger {
+
+    private final long LOG_INTERVAL; // Duration is in ms
+
     public RateLogger(Logger log) {
+        this(log, 100);
+    }
+
+    public RateLogger(Logger log, long interval) {
         LOG = log;
+        LOG_INTERVAL = interval;
     }
 
     private final Logger LOG;
     private String msg = null;
     private long timestamp;
     private int count = 0;
+    private String value = null;
 
     public void flush() {
-        if (msg != null) {
+        if (msg != null && count > 0) {
+            // Optimized logging using parameterized messages to reduce string concatenation overhead
             if (count > 1) {
-                LOG.warn("[" + count + " times] " + msg);
-            } else if (count == 1) {
-                LOG.warn(msg);
+                if (value != null) {
+                    LOG.warn("[{} times] Message: {} Last value:{}", count, msg, value);
+                } else {
+                    LOG.warn("[{} times] Message: {}", count, msg);
+                }
+            } else {
+                if (value != null) {
+                    LOG.warn("Message: {} Value:{}", msg, value);
+                } else {
+                    LOG.warn("Message: {}", msg);
+                }
             }
         }
         msg = null;
+        value = null;
         count = 0;
     }
 
     public void rateLimitLog(String newMsg) {
+        rateLimitLog(newMsg, null);
+    }
+
+    /**
+     * In addition to the message, it also takes a value.
+     */
+    public void rateLimitLog(String newMsg, String newValue) {
         long now = Time.currentElapsedTime();
-        if (newMsg.equals(msg)) {
+        // Optimized string comparison: use reference equality first for constant strings
+        if (newMsg == msg || Objects.equals(newMsg, msg)) {
             ++count;
-            if (now - timestamp >= 100) {
+            value = newValue;
+            if (now - timestamp >= LOG_INTERVAL) {
                 flush();
                 msg = newMsg;
                 timestamp = now;
+                value = newValue;
             }
         } else {
             flush();
             msg = newMsg;
+            value = newValue;
             timestamp = now;
-            LOG.warn(msg);
+            LOG.warn("Message:{} Value:{}", msg, value);
         }
     }
+
 }

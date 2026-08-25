@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,13 +18,18 @@
 
 package org.apache.zookeeper.server.auth;
 
+import jakarta.servlet.http.HttpServletRequest;
+import java.security.cert.Certificate;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
-
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.List;
 import javax.net.ssl.X509KeyManager;
 import javax.net.ssl.X509TrustManager;
 import javax.security.auth.x500.X500Principal;
-
 import org.apache.zookeeper.KeeperException;
 import org.apache.zookeeper.common.ClientX509Util;
 import org.apache.zookeeper.common.X509Exception;
@@ -42,69 +47,53 @@ import org.slf4j.LoggerFactory;
  * to perform remote host certificate authentication. The default algorithm is
  * SunX509 and a JKS KeyStore. To specify the locations of the key store and
  * trust store, set the following system properties:
- * <br/><code>zookeeper.ssl.keyStore.location</code>
- * <br/><code>zookeeper.ssl.trustStore.location</code>
- * <br/>To specify store passwords, set the following system properties:
- * <br/><code>zookeeper.ssl.keyStore.password</code>
- * <br/><code>zookeeper.ssl.trustStore.password</code>
- * <br/>Alternatively, this can be plugged with any X509TrustManager and
+ * <br><code>zookeeper.ssl.keyStore.location</code>
+ * <br><code>zookeeper.ssl.trustStore.location</code>
+ * <br>To specify store passwords, set the following system properties:
+ * <br><code>zookeeper.ssl.keyStore.password</code>
+ * <br><code>zookeeper.ssl.trustStore.password</code>
+ * <br>Alternatively, the passwords can be specified by the following password file path properties:
+ * <br><code>zookeeper.ssl.keyStore.passwordPath</code>
+ * <br><code>zookeeper.ssl.trustStore.passwordPath</code>
+ * <br>Alternatively, this can be plugged with any X509TrustManager and
  * X509KeyManager implementation.
  */
 public class X509AuthenticationProvider implements AuthenticationProvider {
-    static final String ZOOKEEPER_X509AUTHENTICATIONPROVIDER_SUPERUSER
-            = "zookeeper.X509AuthenticationProvider.superUser";
-    private static final Logger LOG
-            = LoggerFactory.getLogger(X509AuthenticationProvider.class);
+
+    public static final String X509_CERTIFICATE_ATTRIBUTE_NAME = "jakarta.servlet.request.X509Certificate";
+    static final String ZOOKEEPER_X509AUTHENTICATIONPROVIDER_SUPERUSER = "zookeeper.X509AuthenticationProvider.superUser";
+    private static final Logger LOG = LoggerFactory.getLogger(X509AuthenticationProvider.class);
     private final X509TrustManager trustManager;
     private final X509KeyManager keyManager;
 
     /**
      * Initialize the X509AuthenticationProvider with a JKS KeyStore and JKS
      * TrustStore according to the following system properties:
-     * <br/><code>zookeeper.ssl.keyStore.location</code>
-     * <br/><code>zookeeper.ssl.trustStore.location</code>
-     * <br/><code>zookeeper.ssl.keyStore.password</code>
-     * <br/><code>zookeeper.ssl.trustStore.password</code>
+     * <br><code>zookeeper.ssl.keyStore.location</code>
+     * <br><code>zookeeper.ssl.trustStore.location</code>
+     * <br><code>zookeeper.ssl.keyStore.password</code>
+     * <br><code>zookeeper.ssl.keyStore.passwordPath</code>
+     * <br><code>zookeeper.ssl.trustStore.password</code>
+     * <br><code>zookeeper.ssl.trustStore.passwordPath</code>
      */
     public X509AuthenticationProvider() throws X509Exception {
         ZKConfig config = new ZKConfig();
         try (X509Util x509Util = new ClientX509Util()) {
-            String keyStoreLocation = config.getProperty(x509Util.getSslKeystoreLocationProperty(), "");
-            String keyStorePassword = config.getProperty(x509Util.getSslKeystorePasswdProperty(), "");
-            String keyStoreTypeProp = config.getProperty(x509Util.getSslKeystoreTypeProperty());
-
-            boolean crlEnabled = Boolean.parseBoolean(config.getProperty(x509Util.getSslCrlEnabledProperty()));
-            boolean ocspEnabled = Boolean.parseBoolean(config.getProperty(x509Util.getSslOcspEnabledProperty()));
-            boolean hostnameVerificationEnabled = Boolean.parseBoolean(
-                    config.getProperty(x509Util.getSslHostnameVerificationEnabledProperty()));
-
             X509KeyManager km = null;
             X509TrustManager tm = null;
-            if (keyStoreLocation.isEmpty()) {
-                LOG.warn("keystore not specified for client connection");
-            } else {
-                try {
-                    km = X509Util.createKeyManager(keyStoreLocation, keyStorePassword, keyStoreTypeProp);
-                } catch (KeyManagerException e) {
-                    LOG.error("Failed to create key manager", e);
-                }
+
+            try {
+                km = x509Util.buildKeyManager(config);
+            } catch (KeyManagerException e) {
+                LOG.error("Failed to create key manager", e);
             }
 
-            String trustStoreLocation = config.getProperty(x509Util.getSslTruststoreLocationProperty(), "");
-            String trustStorePassword = config.getProperty(x509Util.getSslTruststorePasswdProperty(), "");
-            String trustStoreTypeProp = config.getProperty(x509Util.getSslTruststoreTypeProperty());
-
-            if (trustStoreLocation.isEmpty()) {
-                LOG.warn("Truststore not specified for client connection");
-            } else {
-                try {
-                    tm = X509Util.createTrustManager(
-                            trustStoreLocation, trustStorePassword, trustStoreTypeProp, crlEnabled, ocspEnabled,
-                            hostnameVerificationEnabled, false);
-                } catch (TrustManagerException e) {
-                    LOG.error("Failed to create trust manager", e);
-                }
+            try {
+                tm = x509Util.buildTrustManager(config);
+            } catch (TrustManagerException e) {
+                LOG.error("Failed to create trust manager", e);
             }
+
             this.keyManager = km;
             this.trustManager = tm;
         }
@@ -119,8 +108,7 @@ public class X509AuthenticationProvider implements AuthenticationProvider {
      * @param keyManager   X509KeyManager implementation to use for certificate
      *                     management.
      */
-    public X509AuthenticationProvider(X509TrustManager trustManager,
-                                      X509KeyManager keyManager) {
+    public X509AuthenticationProvider(X509TrustManager trustManager, X509KeyManager keyManager) {
         this.trustManager = trustManager;
         this.keyManager = keyManager;
     }
@@ -131,47 +119,27 @@ public class X509AuthenticationProvider implements AuthenticationProvider {
     }
 
     @Override
-    public KeeperException.Code handleAuthentication(ServerCnxn cnxn,
-                                                     byte[] authData) {
-        X509Certificate[] certChain
-                = (X509Certificate[]) cnxn.getClientCertificateChain();
+    public KeeperException.Code handleAuthentication(ServerCnxn cnxn, byte[] authData) {
+        List<Certificate> certs = Arrays.asList(cnxn.getClientCertificateChain());
+        X509Certificate[] certChain = certs.toArray(new X509Certificate[certs.size()]);
 
-        if (certChain == null || certChain.length == 0) {
+        final Collection<Id> ids = handleAuthentication(certChain);
+        if (ids.isEmpty()) {
+            LOG.error("Failed to authenticate session 0x{}", Long.toHexString(cnxn.getSessionId()));
             return KeeperException.Code.AUTHFAILED;
         }
 
-        if (trustManager == null) {
-            LOG.error("No trust manager available to authenticate session 0x{}",
-                    Long.toHexString(cnxn.getSessionId()));
-            return KeeperException.Code.AUTHFAILED;
+        for (Id id : ids) {
+            cnxn.addAuthInfo(id);
         }
-
-        X509Certificate clientCert = certChain[0];
-
-        try {
-            // Authenticate client certificate
-            trustManager.checkClientTrusted(certChain,
-                    clientCert.getPublicKey().getAlgorithm());
-        } catch (CertificateException ce) {
-            LOG.error("Failed to trust certificate for session 0x" +
-                    Long.toHexString(cnxn.getSessionId()), ce);
-            return KeeperException.Code.AUTHFAILED;
-        }
-
-        String clientId = getClientId(clientCert);
-
-        if (clientId.equals(System.getProperty(
-                ZOOKEEPER_X509AUTHENTICATIONPROVIDER_SUPERUSER))) {
-            cnxn.addAuthInfo(new Id("super", clientId));
-            LOG.info("Authenticated Id '{}' as super user", clientId);
-        }
-
-        Id authInfo = new Id(getScheme(), clientId);
-        cnxn.addAuthInfo(authInfo);
-
-        LOG.info("Authenticated Id '{}' for Scheme '{}'",
-                authInfo.getId(), authInfo.getScheme());
         return KeeperException.Code.OK;
+    }
+
+    @Override
+    public List<Id> handleAuthentication(HttpServletRequest request, byte[] authData) {
+        final X509Certificate[] certChain =
+                (X509Certificate[]) request.getAttribute(X509_CERTIFICATE_ATTRIBUTE_NAME);
+        return handleAuthentication(certChain);
     }
 
     /**
@@ -191,11 +159,11 @@ public class X509AuthenticationProvider implements AuthenticationProvider {
     @Override
     public boolean matches(String id, String aclExpr) {
         if (System.getProperty(ZOOKEEPER_X509AUTHENTICATIONPROVIDER_SUPERUSER) != null) {
-            return (id.equals(System.getProperty(ZOOKEEPER_X509AUTHENTICATIONPROVIDER_SUPERUSER))
-                    || id.equals(aclExpr));
+            return id.equals(System.getProperty(ZOOKEEPER_X509AUTHENTICATIONPROVIDER_SUPERUSER))
+                   || id.equals(aclExpr);
         }
 
-        return (id.equals(aclExpr));
+        return id.equals(aclExpr);
     }
 
     @Override
@@ -238,5 +206,38 @@ public class X509AuthenticationProvider implements AuthenticationProvider {
             throw new KeyManagerException("No key manager available");
         }
         return keyManager;
+    }
+
+    private List<Id> handleAuthentication(final X509Certificate[] certChain) {
+        final List<Id> ids = new ArrayList<>();
+        if (certChain == null || certChain.length == 0) {
+            LOG.warn("No certificate chain available to authenticate");
+            return ids;
+        }
+
+        if (trustManager == null) {
+            LOG.error("No trust manager available to authenticate");
+            return ids;
+        }
+
+        final X509Certificate clientCert = certChain[0];
+        try {
+            // Authenticate client certificate
+            trustManager.checkClientTrusted(certChain, clientCert.getPublicKey().getAlgorithm());
+        } catch (CertificateException ce) {
+            LOG.error("Failed to trust certificate", ce);
+            return ids;
+        }
+
+        final String clientId = getClientId(clientCert);
+        if (clientId.equals(System.getProperty(ZOOKEEPER_X509AUTHENTICATIONPROVIDER_SUPERUSER))) {
+            ids.add(new Id("super", clientId));
+            LOG.info("Authenticated Id '{}' as super user", clientId);
+        }
+
+        final Id id = new Id(getScheme(), clientId);
+        ids.add(id);
+        LOG.info("Authenticated Id '{}' for scheme '{}'", id.getId(), id.getScheme());
+        return Collections.unmodifiableList(ids);
     }
 }

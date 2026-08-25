@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,17 +15,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.zookeeper.test;
 
-import org.apache.zookeeper.ZooDefs;
-import org.apache.zookeeper.server.persistence.FileTxnLog;
-import org.apache.zookeeper.server.persistence.TxnLog;
-import org.apache.zookeeper.server.util.LogChopper;
-import org.apache.zookeeper.txn.DeleteTxn;
-import org.apache.zookeeper.txn.TxnHeader;
-import org.junit.Assert;
-import org.junit.Test;
-
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -35,8 +30,17 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
+import org.apache.zookeeper.ZooDefs;
+import org.apache.zookeeper.server.Request;
+import org.apache.zookeeper.server.persistence.FileTxnLog;
+import org.apache.zookeeper.server.persistence.TxnLog;
+import org.apache.zookeeper.server.util.LogChopper;
+import org.apache.zookeeper.txn.DeleteTxn;
+import org.apache.zookeeper.txn.TxnHeader;
+import org.junit.jupiter.api.Test;
 
 class Pair<V1, V2> {
+
     private V1 v1;
     private V2 v2;
     Pair(V1 v1, V2 v2) {
@@ -49,6 +53,7 @@ class Pair<V1, V2> {
     public V2 getSecond() {
         return v2;
     }
+
 }
 
 public class LogChopperTest extends ClientBase {
@@ -81,7 +86,7 @@ public class LogChopperTest extends ClientBase {
         }
         txnLog.close();
         rmr(tmp);
-        return new Pair<Long, Long>(firstZxid, lastZxid);
+        return new Pair<>(firstZxid, lastZxid);
     }
 
     @Test
@@ -97,33 +102,30 @@ public class LogChopperTest extends ClientBase {
 
         for (int i = 0; i < 100; i++) {
             TxnHeader hdr = new TxnHeader(clientId, cxid, ++zxid, ++time, type);
-            txnLog.append(hdr, txn);
+            txnLog.append(new Request(0, 0, 0, hdr, txn, 0));
         }
 
         // append a txn with gap
         TxnHeader hdr = new TxnHeader(clientId, cxid, zxid + 10, ++time, type);
-        txnLog.append(hdr, txn);
+        txnLog.append(new Request(0, 0, 0, hdr, txn, 0));
 
         txnLog.commit();
 
         // now find the log we just created.
         final File logFile = new File(tmpDir, "log." + Integer.toHexString(1001));
         Pair<Long, Long> firstLast = getFirstLastZxid(logFile);
-        Assert.assertEquals(1001, (long)firstLast.getFirst());
-        Assert.assertEquals(1110, (long)firstLast.getSecond());
+        assertEquals(1001, (long) firstLast.getFirst());
+        assertEquals(1110, (long) firstLast.getSecond());
 
         File choppedFile = new File(tmpDir, "chopped_failed");
-        Assert.assertFalse(LogChopper.chop(
-                new FileInputStream(logFile),
-                new FileOutputStream(choppedFile), 1107));
+        assertFalse(LogChopper.chop(new FileInputStream(logFile), new FileOutputStream(choppedFile), 1107));
 
         choppedFile = new File(tmpDir, "chopped");
-        Assert.assertTrue(LogChopper.chop(
-                new FileInputStream(logFile),
-                new FileOutputStream(choppedFile), 1017));
+        assertTrue(LogChopper.chop(new FileInputStream(logFile), new FileOutputStream(choppedFile), 1017));
 
         firstLast = getFirstLastZxid(choppedFile);
-        Assert.assertEquals(1001, (long)firstLast.getFirst());
-        Assert.assertEquals(1017, (long)firstLast.getSecond());
+        assertEquals(1001, (long) firstLast.getFirst());
+        assertEquals(1017, (long) firstLast.getSecond());
     }
+
 }

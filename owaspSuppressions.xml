@@ -23,6 +23,10 @@
       <cve>CVE-2018-8088</cve>
    </suppress>
    <suppress>
+      <!-- ZOOKEEPER-4660 -->
+      <cve>CVE-2021-37533</cve>
+   </suppress>
+   <suppress>
       <!-- ZOOKEEPER-3262 -->
       <cve>CVE-2018-8012</cve>
    </suppress>
@@ -34,5 +38,36 @@
       <!-- https://github.com/jeremylong/DependencyCheck/issues/1653
            False positive on Netty 4.x-->
       <cve>CVE-2018-12056</cve>
+      <!-- ZOOKEEPER-4755: looks like a real vulnerability in Netty,
+           but no report or patch has been published so far.  This has
+           to be monitored and will probably have to be remediated.
+
+           https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2023-4586
+      -->
+      <cve>CVE-2023-4586</cve>
+   </suppress>
+   <suppress>
+      <!-- Seems like false positive - we are not using Prometheus
+           2.x, rather the client which latest is 0.6. at the time of
+           this writing  -->
+      <cve>CVE-2019-3826</cve>
+   </suppress>
+
+ 
+   <suppress>
+      <!-- Seems like false positives about zookeeper-jute -->
+      <cve>CVE-2021-29425</cve>
+   </suppress>
+
+   <suppress>
+      <!-- ZOOKEEPER-4716: jackson related false positives -->
+
+      <!-- according to jackson community, this is not a security issue,
+           see: https://github.com/FasterXML/jackson-databind/issues/3972#issuecomment-1596193098 -->
+      <cve>CVE-2023-35116</cve>
+
+      <!-- the following CVE is not even jackson related, but a vulnerability
+           in json-java which we don't use in ZooKeeper -->
+      <cve>CVE-2022-45688</cve>
    </suppress>
 </suppressions>

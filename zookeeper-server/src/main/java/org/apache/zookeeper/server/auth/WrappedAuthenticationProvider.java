@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,7 +18,10 @@
 
 package org.apache.zookeeper.server.auth;
 
+import jakarta.servlet.http.HttpServletRequest;
+import java.util.List;
 import org.apache.zookeeper.KeeperException;
+import org.apache.zookeeper.data.Id;
 import org.apache.zookeeper.server.ServerCnxn;
 
 /**
@@ -26,14 +29,16 @@ import org.apache.zookeeper.server.ServerCnxn;
  * implementations and the new {@link ServerAuthenticationProvider} interface.
  */
 class WrappedAuthenticationProvider extends ServerAuthenticationProvider {
+
     private final AuthenticationProvider implementation;
 
     static ServerAuthenticationProvider wrap(AuthenticationProvider provider) {
         if (provider == null) {
             return null;
         }
-        return (provider instanceof ServerAuthenticationProvider) ? (ServerAuthenticationProvider)provider
-                : new WrappedAuthenticationProvider(provider);
+        return (provider instanceof ServerAuthenticationProvider)
+            ? (ServerAuthenticationProvider) provider
+            : new WrappedAuthenticationProvider(provider);
     }
 
     private WrappedAuthenticationProvider(AuthenticationProvider implementation) {
@@ -48,6 +53,17 @@ class WrappedAuthenticationProvider extends ServerAuthenticationProvider {
     @Override
     public KeeperException.Code handleAuthentication(ServerObjs serverObjs, byte[] authData) {
         return implementation.handleAuthentication(serverObjs.getCnxn(), authData);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * forwards to older method {@link #handleAuthentication(HttpServletRequest, byte[])}
+     * @return
+     */
+    @Override
+    public List<Id> handleAuthentication(HttpServletRequest request, byte[] authData) {
+        return implementation.handleAuthentication(request, authData);
     }
 
     /**
@@ -74,4 +90,5 @@ class WrappedAuthenticationProvider extends ServerAuthenticationProvider {
     public boolean isValid(String id) {
         return implementation.isValid(id);
     }
+
 }

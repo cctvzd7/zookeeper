@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,8 +18,8 @@
 
 package org.apache.zookeeper.server.admin;
 
+import java.io.OutputStream;
 import java.io.PrintWriter;
-import java.util.Map;
 
 /**
  * CommandOutputters are used to format the responses from Commands.
@@ -28,8 +28,13 @@ import java.util.Map;
  * @see JettyAdminServer
  */
 public interface CommandOutputter {
+
     /** The MIME type of this output (e.g., "application/json") */
     String getContentType();
 
-    void output(CommandResponse response, PrintWriter pw);
+    /** Print out data as output */
+    default void output(CommandResponse response, PrintWriter pw) {}
+
+    /** Stream out data as output */
+    default void output(final CommandResponse response, final OutputStream os) {}
 }

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,19 +19,22 @@
 package org.apache.zookeeper.server.watch;
 
 import java.io.PrintWriter;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
+import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
-
 import org.apache.zookeeper.WatchedEvent;
 import org.apache.zookeeper.Watcher;
 import org.apache.zookeeper.Watcher.Event.EventType;
 import org.apache.zookeeper.Watcher.Event.KeeperState;
+import org.apache.zookeeper.data.ACL;
 import org.apache.zookeeper.server.ServerCnxn;
 import org.apache.zookeeper.server.ServerMetrics;
+import org.apache.zookeeper.server.ServerWatcher;
 import org.apache.zookeeper.server.ZooTrace;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,29 +44,35 @@ import org.slf4j.LoggerFactory;
  * and removes watchers and their watches in addition to managing triggers.
  */
 public class WatchManager implements IWatchManager {
+
     private static final Logger LOG = LoggerFactory.getLogger(WatchManager.class);
 
-    private final Map<String, Set<Watcher>> watchTable =
-        new HashMap<String, Set<Watcher>>();
+    private final Map<String, Set<Watcher>> watchTable = new HashMap<>();
 
-    private final Map<Watcher, Set<String>> watch2Paths =
-        new HashMap<Watcher, Set<String>>();
+    private final Map<Watcher, Map<String, WatchStats>> watch2Paths = new HashMap<>();
+
+    private int recursiveWatchQty = 0;
 
     @Override
-    public synchronized int size(){
+    public synchronized int size() {
         int result = 0;
-        for(Set<Watcher> watches : watchTable.values()) {
+        for (Set<Watcher> watches : watchTable.values()) {
             result += watches.size();
         }
         return result;
     }
 
-    boolean isDeadWatcher(Watcher watcher) {
+    private boolean isDeadWatcher(Watcher watcher) {
         return watcher instanceof ServerCnxn && ((ServerCnxn) watcher).isStale();
     }
 
     @Override
-    public synchronized boolean addWatch(String path, Watcher watcher) {
+    public boolean addWatch(String path, Watcher watcher) {
+        return addWatch(path, watcher, WatcherMode.DEFAULT_WATCHER_MODE);
+    }
+
+    @Override
+    public synchronized boolean addWatch(String path, Watcher watcher, WatcherMode watcherMode) {
         if (isDeadWatcher(watcher)) {
             LOG.debug("Ignoring addWatch with closed cnxn");
             return false;
@@ -74,27 +83,39 @@ public class WatchManager implements IWatchManager {
             // don't waste memory if there are few watches on a node
             // rehash when the 4th entry is added, doubling size thereafter
             // seems like a good compromise
-            list = new HashSet<Watcher>(4);
+            list = new HashSet<>(4);
             watchTable.put(path, list);
         }
         list.add(watcher);
 
-        Set<String> paths = watch2Paths.get(watcher);
+        Map<String, WatchStats> paths = watch2Paths.get(watcher);
         if (paths == null) {
             // cnxns typically have many watches, so use default cap here
-            paths = new HashSet<String>();
+            paths = new HashMap<>();
             watch2Paths.put(watcher, paths);
         }
-        return paths.add(path);
+
+        WatchStats stats = paths.getOrDefault(path, WatchStats.NONE);
+        WatchStats newStats = stats.addMode(watcherMode);
+
+        if (newStats != stats) {
+            paths.put(path, newStats);
+            if (watcherMode.isRecursive()) {
+                ++recursiveWatchQty;
+            }
+            return true;
+        }
+
+        return false;
     }
 
     @Override
     public synchronized void removeWatcher(Watcher watcher) {
-        Set<String> paths = watch2Paths.remove(watcher);
+        Map<String, WatchStats> paths = watch2Paths.remove(watcher);
         if (paths == null) {
             return;
         }
-        for (String p : paths) {
+        for (String p : paths.keySet()) {
             Set<Watcher> list = watchTable.get(p);
             if (list != null) {
                 list.remove(watcher);
@@ -103,62 +124,93 @@ public class WatchManager implements IWatchManager {
                 }
             }
         }
-    }
-
-    @Override
-    public WatcherOrBitSet triggerWatch(String path, EventType type) {
-        return triggerWatch(path, type, null);
-    }
-
-    @Override
-    public WatcherOrBitSet triggerWatch(
-            String path, EventType type, WatcherOrBitSet supress) {
-        WatchedEvent e = new WatchedEvent(type,
-                KeeperState.SyncConnected, path);
-        Set<Watcher> watchers;
-        synchronized (this) {
-            watchers = watchTable.remove(path);
-            if (watchers == null || watchers.isEmpty()) {
-                if (LOG.isTraceEnabled()) {
-                    ZooTrace.logTraceMessage(LOG,
-                            ZooTrace.EVENT_DELIVERY_TRACE_MASK,
-                            "No watchers for " + path);
-                }
-                return null;
+        for (WatchStats stats : paths.values()) {
+            if (stats.hasMode(WatcherMode.PERSISTENT_RECURSIVE)) {
+                --recursiveWatchQty;
             }
-            for (Watcher w : watchers) {
-                Set<String> paths = watch2Paths.get(w);
-                if (paths != null) {
-                    paths.remove(path);
+        }
+    }
+
+    @Override
+    public WatcherOrBitSet triggerWatch(String path, EventType type, long zxid, List<ACL> acl) {
+        return triggerWatch(path, type, zxid, acl, null);
+    }
+
+    @Override
+    public WatcherOrBitSet triggerWatch(String path, EventType type, long zxid, List<ACL> acl, WatcherOrBitSet suppress) {
+        WatchedEvent e = new WatchedEvent(type, KeeperState.SyncConnected, path, zxid);
+        Set<Watcher> watchers = new HashSet<>();
+        synchronized (this) {
+            PathParentIterator pathParentIterator = getPathParentIterator(path);
+            for (String localPath : pathParentIterator.asIterable()) {
+                Set<Watcher> thisWatchers = watchTable.get(localPath);
+                if (thisWatchers == null || thisWatchers.isEmpty()) {
+                    continue;
+                }
+                Iterator<Watcher> iterator = thisWatchers.iterator();
+                while (iterator.hasNext()) {
+                    Watcher watcher = iterator.next();
+                    Map<String, WatchStats> paths = watch2Paths.getOrDefault(watcher, Collections.emptyMap());
+                    WatchStats stats = paths.get(localPath);
+                    if (stats == null) {
+                        LOG.warn("inconsistent watch table for watcher {}, {} not in path list", watcher, localPath);
+                        continue;
+                    }
+                    if (!pathParentIterator.atParentPath()) {
+                        watchers.add(watcher);
+                        WatchStats newStats = stats.removeMode(WatcherMode.STANDARD);
+                        if (newStats == WatchStats.NONE) {
+                            iterator.remove();
+                            paths.remove(localPath);
+                        } else if (newStats != stats) {
+                            paths.put(localPath, newStats);
+                        }
+                    } else if (stats.hasMode(WatcherMode.PERSISTENT_RECURSIVE)) {
+                        watchers.add(watcher);
+                    }
+                }
+                if (thisWatchers.isEmpty()) {
+                    watchTable.remove(localPath);
                 }
             }
         }
+        if (watchers.isEmpty()) {
+            if (LOG.isTraceEnabled()) {
+                ZooTrace.logTraceMessage(LOG, ZooTrace.EVENT_DELIVERY_TRACE_MASK, "No watchers for " + path);
+            }
+            return null;
+        }
+
         for (Watcher w : watchers) {
-            if (supress != null && supress.contains(w)) {
+            if (suppress != null && suppress.contains(w)) {
                 continue;
             }
-            w.process(e);
+            if (w instanceof ServerWatcher) {
+                ((ServerWatcher) w).process(e, acl);
+            } else {
+                w.process(e);
+            }
         }
 
         switch (type) {
-        case NodeCreated:
-            ServerMetrics.NODE_CREATED_WATCHER.add(watchers.size());
-            break;
+            case NodeCreated:
+                ServerMetrics.getMetrics().NODE_CREATED_WATCHER.add(watchers.size());
+                break;
 
-        case NodeDeleted:
-            ServerMetrics.NODE_DELETED_WATCHER.add(watchers.size());
-            break;
+            case NodeDeleted:
+                ServerMetrics.getMetrics().NODE_DELETED_WATCHER.add(watchers.size());
+                break;
 
-        case NodeDataChanged:
-            ServerMetrics.NODE_CHANGED_WATCHER.add(watchers.size());
-            break;
+            case NodeDataChanged:
+                ServerMetrics.getMetrics().NODE_CHANGED_WATCHER.add(watchers.size());
+                break;
 
-        case NodeChildrenChanged:
-            ServerMetrics.NODE_CHILDREN_WATCHER.add(watchers.size());
-            break;
-        default:
-            // Other types not logged.
-            break;
+            case NodeChildrenChanged:
+                ServerMetrics.getMetrics().NODE_CHILDREN_WATCHER.add(watchers.size());
+                break;
+            default:
+                // Other types not logged.
+                break;
         }
 
         return new WatcherOrBitSet(watchers);
@@ -168,11 +220,10 @@ public class WatchManager implements IWatchManager {
     public synchronized String toString() {
         StringBuilder sb = new StringBuilder();
 
-        sb.append(watch2Paths.size()).append(" connections watching ")
-            .append(watchTable.size()).append(" paths\n");
+        sb.append(watch2Paths.size()).append(" connections watching ").append(watchTable.size()).append(" paths\n");
 
         int total = 0;
-        for (Set<String> paths : watch2Paths.values()) {
+        for (Map<String, WatchStats> paths : watch2Paths.values()) {
             total += paths.size();
         }
         sb.append("Total watches:").append(total);
@@ -187,15 +238,15 @@ public class WatchManager implements IWatchManager {
                 pwriter.println(e.getKey());
                 for (Watcher w : e.getValue()) {
                     pwriter.print("\t0x");
-                    pwriter.print(Long.toHexString(((ServerCnxn)w).getSessionId()));
+                    pwriter.print(Long.toHexString(((ServerCnxn) w).getSessionId()));
                     pwriter.print("\n");
                 }
             }
         } else {
-            for (Entry<Watcher, Set<String>> e : watch2Paths.entrySet()) {
+            for (Entry<Watcher, Map<String, WatchStats>> e : watch2Paths.entrySet()) {
                 pwriter.print("0x");
-                pwriter.println(Long.toHexString(((ServerCnxn)e.getKey()).getSessionId()));
-                for (String path : e.getValue()) {
+                pwriter.println(Long.toHexString(((ServerCnxn) e.getKey()).getSessionId()));
+                for (String path : e.getValue().keySet()) {
                     pwriter.print("\t");
                     pwriter.println(path);
                 }
@@ -205,38 +256,82 @@ public class WatchManager implements IWatchManager {
 
     @Override
     public synchronized boolean containsWatcher(String path, Watcher watcher) {
-        Set<String> paths = watch2Paths.get(watcher);
-        if (paths == null || !paths.contains(path)) {
+        return containsWatcher(path, watcher, null);
+    }
+
+    @Override
+    public synchronized boolean containsWatcher(String path, Watcher watcher, WatcherMode watcherMode) {
+        Map<String, WatchStats> paths = watch2Paths.get(watcher);
+        if (paths == null) {
             return false;
         }
-        return true;
+        WatchStats stats = paths.get(path);
+        return stats != null && (watcherMode == null || stats.hasMode(watcherMode));
+    }
+
+    private WatchStats unwatch(String path, Watcher watcher, Map<String, WatchStats> paths, Set<Watcher> watchers) {
+        WatchStats stats = paths.remove(path);
+        if (stats == null) {
+            return WatchStats.NONE;
+        }
+        if (paths.isEmpty()) {
+            watch2Paths.remove(watcher);
+        }
+        watchers.remove(watcher);
+        if (watchers.isEmpty()) {
+            watchTable.remove(path);
+        }
+        return stats;
+    }
+
+    @Override
+    public synchronized boolean removeWatcher(String path, Watcher watcher, WatcherMode watcherMode) {
+        Map<String, WatchStats> paths = watch2Paths.get(watcher);
+        Set<Watcher> watchers = watchTable.get(path);
+        if (paths == null || watchers == null) {
+            return false;
+        }
+
+        WatchStats oldStats;
+        WatchStats newStats;
+        if (watcherMode != null) {
+            oldStats = paths.getOrDefault(path, WatchStats.NONE);
+            newStats = oldStats.removeMode(watcherMode);
+            if (newStats != WatchStats.NONE) {
+                if (newStats != oldStats) {
+                    paths.put(path, newStats);
+                }
+            } else if (oldStats != WatchStats.NONE) {
+                unwatch(path, watcher, paths, watchers);
+            }
+        } else {
+            oldStats = unwatch(path, watcher, paths, watchers);
+            newStats = WatchStats.NONE;
+        }
+
+        if (oldStats.hasMode(WatcherMode.PERSISTENT_RECURSIVE) && !newStats.hasMode(WatcherMode.PERSISTENT_RECURSIVE)) {
+            --recursiveWatchQty;
+        }
+
+        return oldStats != newStats;
     }
 
     @Override
     public synchronized boolean removeWatcher(String path, Watcher watcher) {
-        Set<String> paths = watch2Paths.get(watcher);
-        if (paths == null || !paths.remove(path)) {
-            return false;
-        }
+        return removeWatcher(path, watcher, null);
+    }
 
-        Set<Watcher> list = watchTable.get(path);
-        if (list == null || !list.remove(watcher)) {
-            return false;
-        }
-
-        if (list.isEmpty()) {
-            watchTable.remove(path);
-        }
-
-        return true;
+    // VisibleForTesting
+    Map<Watcher, Map<String, WatchStats>> getWatch2Paths() {
+        return watch2Paths;
     }
 
     @Override
     public synchronized WatchesReport getWatches() {
-        Map<Long, Set<String>> id2paths = new HashMap<Long, Set<String>>();
-        for (Entry<Watcher, Set<String>> e: watch2Paths.entrySet()) {
+        Map<Long, Set<String>> id2paths = new HashMap<>();
+        for (Entry<Watcher, Map<String, WatchStats>> e : watch2Paths.entrySet()) {
             Long id = ((ServerCnxn) e.getKey()).getSessionId();
-            Set<String> paths = new HashSet<String>(e.getValue());
+            Set<String> paths = new HashSet<>(e.getValue().keySet());
             id2paths.put(id, paths);
         }
         return new WatchesReport(id2paths);
@@ -244,9 +339,9 @@ public class WatchManager implements IWatchManager {
 
     @Override
     public synchronized WatchesPathReport getWatchesByPath() {
-        Map<String, Set<Long>> path2ids = new HashMap<String, Set<Long>>();
+        Map<String, Set<Long>> path2ids = new HashMap<>();
         for (Entry<String, Set<Watcher>> e : watchTable.entrySet()) {
-            Set<Long> ids = new HashSet<Long>(e.getValue().size());
+            Set<Long> ids = new HashSet<>(e.getValue().size());
             path2ids.put(e.getKey(), ids);
             for (Watcher watcher : e.getValue()) {
                 ids.add(((ServerCnxn) watcher).getSessionId());
@@ -258,13 +353,24 @@ public class WatchManager implements IWatchManager {
     @Override
     public synchronized WatchesSummary getWatchesSummary() {
         int totalWatches = 0;
-        for (Set<String> paths : watch2Paths.values()) {
+        for (Map<String, WatchStats> paths : watch2Paths.values()) {
             totalWatches += paths.size();
         }
-        return new WatchesSummary (watch2Paths.size(), watchTable.size(),
-                                   totalWatches);
+        return new WatchesSummary(watch2Paths.size(), watchTable.size(), totalWatches);
     }
 
     @Override
     public void shutdown() { /* do nothing */ }
+
+    // VisibleForTesting
+    synchronized int getRecursiveWatchQty() {
+        return recursiveWatchQty;
+    }
+
+    private PathParentIterator getPathParentIterator(String path) {
+        if (getRecursiveWatchQty() == 0) {
+            return PathParentIterator.forPathOnly(path);
+        }
+        return PathParentIterator.forAll(path);
+    }
 }

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,15 +18,6 @@
 
 package org.apache.zookeeper.common;
 
-import java.net.InetAddress;
-import java.net.NetworkInterface;
-import java.net.SocketException;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.Enumeration;
-import java.util.HashSet;
-import java.util.Set;
-
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.epoll.Epoll;
 import io.netty.channel.epoll.EpollEventLoopGroup;
@@ -37,6 +28,15 @@ import io.netty.channel.socket.ServerSocketChannel;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
+import io.netty.util.concurrent.DefaultThreadFactory;
+import java.net.InetAddress;
+import java.net.NetworkInterface;
+import java.net.SocketException;
+import java.util.Collections;
+import java.util.Enumeration;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.concurrent.ThreadFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -44,9 +44,22 @@ import org.slf4j.LoggerFactory;
  * Helper methods for netty code.
  */
 public class NettyUtils {
-    private static final Logger LOG = LoggerFactory.getLogger(NettyUtils.class);
 
+    public static final String THREAD_POOL_NAME_PREFIX = "zkNetty-";
+    private static final Logger LOG = LoggerFactory.getLogger(NettyUtils.class);
     private static final int DEFAULT_INET_ADDRESS_COUNT = 1;
+
+    /**
+     * Returns a ThreadFactory which generates daemon threads, and uses
+     * the passed class's name to generate the thread names.
+     *
+     * @param clazz Class name to use for generating thread names
+     * @return Netty DefaultThreadFactory configured to create daemon threads
+     */
+    private static ThreadFactory createThreadFactory(String clazz) {
+        final String poolName = THREAD_POOL_NAME_PREFIX + clazz;
+        return new DefaultThreadFactory(poolName, true);
+    }
 
     /**
      * If {@link Epoll#isAvailable()} <code>== true</code>, returns a new
@@ -56,11 +69,7 @@ public class NettyUtils {
      * @return a new {@link EventLoopGroup}.
      */
     public static EventLoopGroup newNioOrEpollEventLoopGroup() {
-        if (Epoll.isAvailable()) {
-            return new EpollEventLoopGroup();
-        } else {
-            return new NioEventLoopGroup();
-        }
+        return newNioOrEpollEventLoopGroup(0);
     }
 
     /**
@@ -73,9 +82,13 @@ public class NettyUtils {
      */
     public static EventLoopGroup newNioOrEpollEventLoopGroup(int nThreads) {
         if (Epoll.isAvailable()) {
-            return new EpollEventLoopGroup(nThreads);
+            final String clazz = EpollEventLoopGroup.class.getSimpleName();
+            final ThreadFactory factory = createThreadFactory(clazz);
+            return new EpollEventLoopGroup(nThreads, factory);
         } else {
-            return new NioEventLoopGroup(nThreads);
+            final String clazz = NioEventLoopGroup.class.getSimpleName();
+            final ThreadFactory factory = createThreadFactory(clazz);
+            return new NioEventLoopGroup(nThreads, factory);
         }
     }
 
@@ -131,34 +144,26 @@ public class NettyUtils {
             for (NetworkInterface networkInterface : Collections.list(allNetworkInterfaces)) {
                 for (InetAddress inetAddress : Collections.list(networkInterface.getInetAddresses())) {
                     if (inetAddress.isLinkLocalAddress()) {
-                        if (LOG.isDebugEnabled()) {
-                            LOG.debug("Ignoring link-local InetAddress {}", inetAddress);
-                        }
+                        LOG.debug("Ignoring link-local InetAddress {}", inetAddress);
                         continue;
                     }
                     if (inetAddress.isMulticastAddress()) {
-                        if (LOG.isDebugEnabled()) {
-                            LOG.debug("Ignoring multicast InetAddress {}", inetAddress);
-                        }
+                        LOG.debug("Ignoring multicast InetAddress {}", inetAddress);
                         continue;
                     }
                     if (inetAddress.isLoopbackAddress()) {
-                        if (LOG.isDebugEnabled()) {
-                            LOG.debug("Ignoring loopback InetAddress {}", inetAddress);
-                        }
+                        LOG.debug("Ignoring loopback InetAddress {}", inetAddress);
                         continue;
                     }
                     validInetAddresses.add(inetAddress);
                 }
             }
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("Detected {} local network addresses", validInetAddresses.size());
-                LOG.debug("Resolved local addresses are: {}", Arrays.toString(validInetAddresses.toArray()));
-            }
-            return validInetAddresses.size() > 0 ? validInetAddresses.size() : DEFAULT_INET_ADDRESS_COUNT;
+            LOG.debug("Detected {} local network addresses: {}", validInetAddresses.size(), validInetAddresses);
+            return !validInetAddresses.isEmpty() ? validInetAddresses.size() : DEFAULT_INET_ADDRESS_COUNT;
         } catch (SocketException ex) {
             LOG.warn("Failed to list all network interfaces, assuming 1", ex);
             return DEFAULT_INET_ADDRESS_COUNT;
         }
     }
+
 }

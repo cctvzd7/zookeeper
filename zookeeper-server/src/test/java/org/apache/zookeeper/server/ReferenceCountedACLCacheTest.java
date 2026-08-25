@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,24 +18,24 @@
 
 package org.apache.zookeeper.server;
 
-import org.apache.jute.BinaryInputArchive;
-import org.apache.jute.BinaryOutputArchive;
-import org.apache.jute.InputArchive;
-import org.apache.jute.OutputArchive;
-import org.apache.zookeeper.ZooDefs;
-import org.apache.zookeeper.data.ACL;
-import org.apache.zookeeper.data.Id;
-import org.junit.Test;
-
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.fail;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
-
-import static org.junit.Assert.*;
+import org.apache.jute.BinaryInputArchive;
+import org.apache.jute.BinaryOutputArchive;
+import org.apache.jute.OutputArchive;
+import org.apache.zookeeper.ZooDefs;
+import org.apache.zookeeper.data.ACL;
+import org.apache.zookeeper.data.Id;
+import org.junit.jupiter.api.Test;
 
 public class ReferenceCountedACLCacheTest {
+
     @Test
     public void testSameACLGivesSameID() {
         List<ACL> testACL = createACL("myid");
@@ -50,18 +50,18 @@ public class ReferenceCountedACLCacheTest {
 
     @Test
     public void testWhetherOrderingMatters() {
-        List<ACL> testACL = new ArrayList<ACL>();
+        List<ACL> testACL = new ArrayList<>();
         testACL.add(new ACL(ZooDefs.Perms.READ, new Id("scheme", "ro")));
         testACL.add(new ACL(ZooDefs.Perms.WRITE, new Id("scheme", "rw")));
 
         ReferenceCountedACLCache cache = new ReferenceCountedACLCache();
         Long aclId = cache.convertAcls(testACL);
 
-        List<ACL> testACL2 = new ArrayList<ACL>();
+        List<ACL> testACL2 = new ArrayList<>();
         testACL2.add(new ACL(ZooDefs.Perms.WRITE, new Id("scheme", "rw")));
         testACL2.add(new ACL(ZooDefs.Perms.READ, new Id("scheme", "ro")));
 
-        assertFalse(aclId.equals(cache.convertAcls(testACL2)));
+        assertNotEquals(aclId, cache.convertAcls(testACL2));
     }
 
     @Test
@@ -90,7 +90,7 @@ public class ReferenceCountedACLCacheTest {
         List<ACL> testACL3 = createACL("differentId");
 
         Long aclId3 = cache.convertAcls(testACL3);
-        assertFalse(aclId3.equals(aclId));
+        assertNotEquals(aclId3, aclId);
         assertEquals(2, cache.size());
     }
 
@@ -126,7 +126,7 @@ public class ReferenceCountedACLCacheTest {
         assertEquals(1, cache.size());
 
         Long newId = cache.convertAcls(testACL);
-        assertFalse(aclId.equals(newId));
+        assertNotEquals(aclId, newId);
     }
 
     @Test
@@ -195,7 +195,7 @@ public class ReferenceCountedACLCacheTest {
 
     @Test
     public void testNPEInDeserialize() throws IOException {
-        ReferenceCountedACLCache serializeCache = new ReferenceCountedACLCache(){
+        ReferenceCountedACLCache serializeCache = new ReferenceCountedACLCache() {
             @Override
             public synchronized void serialize(OutputArchive oa) throws IOException {
                 oa.writeInt(1, "map");
@@ -211,15 +211,14 @@ public class ReferenceCountedACLCacheTest {
         ReferenceCountedACLCache deserializedCache = new ReferenceCountedACLCache();
         try {
             deserializedCache.deserialize(inArchive);
-        } catch (NullPointerException e){
+        } catch (NullPointerException e) {
             fail("should not throw NPE while do deserialized");
         } catch (RuntimeException e) {
             // do nothing.
         }
     }
 
-
-    private void assertCachesEqual(ReferenceCountedACLCache expected, ReferenceCountedACLCache actual){
+    private void assertCachesEqual(ReferenceCountedACLCache expected, ReferenceCountedACLCache actual) {
         assertEquals(expected.aclIndex, actual.aclIndex);
         assertEquals(expected.aclKeyMap, actual.aclKeyMap);
         assertEquals(expected.longKeyMap, actual.longKeyMap);
@@ -256,9 +255,9 @@ public class ReferenceCountedACLCacheTest {
         assertEquals(2, deserializedCache.size());
         assertEquals(aclId1, deserializedCache.convertAcls(acl1));
         assertEquals(aclId2, deserializedCache.convertAcls(acl2));
-        assertFalse(acl3.equals(deserializedCache.convertAcls(acl3)));
-        assertFalse(acl4.equals(deserializedCache.convertAcls(acl4)));
-        assertFalse(acl5.equals(deserializedCache.convertAcls(acl5)));
+        assertNotEquals(acl3, deserializedCache.convertAcls(acl3));
+        assertNotEquals(acl4, deserializedCache.convertAcls(acl4));
+        assertNotEquals(acl5, deserializedCache.convertAcls(acl5));
     }
 
     private void callAddUsageNTimes(ReferenceCountedACLCache deserializedCache, Long aclId, int num) {
@@ -272,7 +271,7 @@ public class ReferenceCountedACLCacheTest {
             return -1L;
         }
 
-        for (int i = 0; i < num -1; i++) {
+        for (int i = 0; i < num - 1; i++) {
             cache.convertAcls(acl);
         }
 
@@ -280,8 +279,9 @@ public class ReferenceCountedACLCacheTest {
     }
 
     private List<ACL> createACL(String id) {
-        List<ACL> acl1 = new ArrayList<ACL>();
+        List<ACL> acl1 = new ArrayList<>();
         acl1.add(new ACL(ZooDefs.Perms.ADMIN, new Id("scheme", id)));
         return acl1;
     }
+
 }

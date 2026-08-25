@@ -121,7 +121,7 @@ int handle_error(zhandle_t* zh, SOCKET sock, char* message)
        return -1;
 }
 
-//--create socket pair for interupting selects.
+//--create socket pair for interrupting selects.
 int create_socket_pair(zhandle_t* zh, SOCKET fds[2]) 
 { 
     struct sockaddr_in inaddr; 
@@ -256,12 +256,13 @@ int adaptor_init(zhandle_t *zh)
     pthread_mutex_init(&zh->to_process.lock,0);
     pthread_mutex_init(&adaptor_threads->zh_lock,0);
     pthread_mutex_init(&adaptor_threads->reconfig_lock,0);
-    // to_send must be recursive mutex    
+    pthread_mutex_init(&adaptor_threads->watchers_lock,0);
+    // to_send must be recursive mutex
     pthread_mutexattr_init(&recursive_mx_attr);
     pthread_mutexattr_settype(&recursive_mx_attr, PTHREAD_MUTEX_RECURSIVE);
     pthread_mutex_init(&zh->to_send.lock,&recursive_mx_attr);
     pthread_mutexattr_destroy(&recursive_mx_attr);
-    
+
     pthread_mutex_init(&zh->sent_requests.lock,0);
     pthread_cond_init(&zh->sent_requests.cond,0);
     pthread_mutex_init(&zh->completions_to_process.lock,0);
@@ -358,6 +359,7 @@ unsigned __stdcall do_io( void * v)
 void *do_io(void *v)
 #endif
 {
+    log_callback_fn log_fn;
     zhandle_t *zh = (zhandle_t*)v;
 #ifndef WIN32
     struct pollfd fds[2];
@@ -369,12 +371,13 @@ void *do_io(void *v)
     fds[0].fd=adaptor_threads->self_pipe[0];
     fds[0].events=POLLIN;
     while(!zh->close_requested) {
-        zh->io_count++;
         struct timeval tv;
         int fd;
         int interest;
         int timeout;
         int maxfd=1;
+
+        zh->io_count++;
 
         zookeeper_interest(zh, &fd, &interest, &tv);
         if (fd != -1) {
@@ -454,8 +457,9 @@ void *do_io(void *v)
         if(is_unrecoverable(zh))
             break;
     }
-    api_epilog(zh, 0);    
-    LOG_DEBUG(LOGCALLBACK(zh), "IO thread terminated");
+    log_fn = LOGCALLBACK(zh);
+    api_epilog(zh, 0);
+    LOG_DEBUG(log_fn, "IO thread terminated");
     return 0;
 }
 
@@ -466,6 +470,7 @@ void *do_completion(void *v)
 #endif
 {
     zhandle_t *zh = v;
+    log_callback_fn fn;
     api_prolog(zh);
     notify_thread_ready(zh);
     LOG_DEBUG(LOGCALLBACK(zh), "started completion thread");
@@ -477,8 +482,9 @@ void *do_completion(void *v)
         pthread_mutex_unlock(&zh->completions_to_process.lock);
         process_completions(zh);
     }
-    api_epilog(zh, 0);    
-    LOG_DEBUG(LOGCALLBACK(zh), "completion thread terminated");
+    fn = LOGCALLBACK(zh);
+    api_epilog(zh, 0);
+    LOG_DEBUG(fn, "completion thread terminated");
     return 0;
 }
 
@@ -525,6 +531,25 @@ int unlock_reconfig(struct _zhandle *zh)
     struct adaptor_threads *adaptor = zh->adaptor_priv;
     if (adaptor) {
         return pthread_mutex_unlock(&adaptor->reconfig_lock);
+    } else {
+        return 0;
+    }
+}
+
+int lock_watchers(struct _zhandle *zh)
+{
+    struct adaptor_threads *adaptor = zh->adaptor_priv;
+    if (adaptor) {
+        return pthread_mutex_lock(&adaptor->watchers_lock);
+    } else {
+        return 0;
+    }
+}
+int unlock_watchers(struct _zhandle *zh)
+{
+    struct adaptor_threads *adaptor = zh->adaptor_priv;
+    if (adaptor) {
+        return pthread_mutex_unlock(&adaptor->watchers_lock);
     } else {
         return 0;
     }
